@@ -1,41 +1,45 @@
-# Runtime Configuration and Secrets
+# Configuration
 
-The CLI reads process environment variables first, then fills in missing values from the project-root `.env` file. Existing process values always win. The parser supports simple `KEY=value` lines and quoted values; it does not expand variables. `.env` is ignored by Git. Keep credentials out of YAML, source files, command arguments, Docker images, and logs.
+Runtime settings come from the process environment and, for local runs, the ignored project `.env`. The loader does not overwrite variables already provided by the process. `.env.example` contains names and safe defaults only.
 
-## Free-first local settings
+## Sources and editorial policy
 
-| Variable | Local default | Purpose |
+`config/sources.yaml` lists enabled free RSS/Atom feeds. Each source has a stable ID, display name, endpoint, categories, quality weight, timeout, and language. Sources fail independently; an unavailable feed is recorded as a source failure while the remaining feeds continue. The project uses only RSS/Atom and does not require a paid news API.
+
+`config/categories.yaml` contains deterministic source IDs, feed tags, and token/phrase signals for India, World, AI, Technology, Business & Economy, Science & Space, Sports, and Entertainment. A story can match more than one category. Unknown stories remain ineligible for the edition instead of being assigned an arbitrary section.
+
+`config/ranking.yaml` controls source quality, freshness, category evidence, and corroboration scoring. `config/selection.yaml` controls section balance, with a 24-story overall limit and at most five stories per category.
+
+## Email
+
+| Variable | Meaning | Default |
 |---|---|---|
-| `DATABASE_BACKEND` | `sqlite` | Select `sqlite` or optional `postgres`; there is no backend fallback. |
-| `DATABASE_PATH` | `data/pipeline_runs.sqlite3` | SQLite pipeline run and delivery-claim ledger. |
-| `DATABASE_URL` | unset | PostgreSQL URL, used only when the optional backend is selected. |
-| `NEWSLETTER_TIMEZONE` | `Asia/Kolkata` in the sample | Local newsletter date and publication-time display. |
-| `APP_CONFIG_DIR` | `config` | Sources, categories, ranking, and selection YAML. |
-| `PREVIEW_DIRECTORY` | `data/previews` | Generated HTML and plain-text files. |
-| `PYTHON_EXE` | unset | Full Python executable path used in Task Scheduler setup documentation. |
-| `LLM_API_KEY` | unset | Secret OpenRouter API key. |
-| `LLM_MODEL` | `openrouter/free` in sample | Explicit free-model router; AI enrichment falls back to source text on provider failure. |
-| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` in sample | OpenRouter-compatible API base URL. |
-| `LLM_TIMEOUT_SECONDS`, `LLM_MAX_ATTEMPTS` | bounded defaults | LLM timeout and retry controls. |
+| `EMAIL_PROVIDER` | Delivery provider | `smtp` |
+| `SMTP_HOST` | SMTP server | `smtp.gmail.com` |
+| `SMTP_PORT` | STARTTLS port | `587` |
+| `SMTP_USERNAME` | Sender account | Required for send |
+| `EMAIL_FROM` | Sender address | Defaults to username |
+| `NEWSLETTER_RECIPIENT` | Destination | Required for send |
+| `SMTP_PASSWORD` | SMTP app password in hosted workflow | Required there |
+| `EMAIL_TIMEOUT_SECONDS` | Connection timeout | `20` |
+| `EMAIL_MAX_ATTEMPTS` | Bounded provider attempts | `2` |
 
-OpenRouter's free router is optional and can be unavailable or rate-limited. The application does not fall back to a paid model; failed AI enrichment uses the existing source-description fallback. OpenRouter currently lists limits and free-tier terms that can change, so the operator must keep the model set to `openrouter/free` and must not add credits or enable a paid route when the project must stay at ₹0. [OpenRouter free router](https://openrouter.ai/openrouter/free/apps), [OpenRouter pricing](https://openrouter.ai/pricing)
+On Windows, SMTP credentials are stored in Credential Manager through `personal-news-agent email-credential-set`, rather than saved in `.env`. In GitHub Actions, the password is supplied as a repository secret. Gmail SMTP requires `EMAIL_FROM` to match `SMTP_USERNAME`.
 
-## Email settings
+## Optional LLM enrichment
 
-| Variable | Meaning |
-|---|---|
-| `EMAIL_PROVIDER` | `smtp` (free-first default) or `resend` (retained optional provider). |
-| `SMTP_HOST`, `SMTP_PORT` | SMTP endpoint; Gmail-compatible defaults are `smtp.gmail.com` and `587` (STARTTLS). |
-| `SMTP_USERNAME` | Account address used for SMTP authentication. |
-| `EMAIL_FROM` | Sender address; for a personal Gmail account, use the same Gmail address. If blank, the SMTP username is used. |
-| `NEWSLETTER_RECIPIENT` | One recipient. |
-| `EMAIL_TIMEOUT_SECONDS`, `EMAIL_MAX_ATTEMPTS` | Bounded SMTP/API timeouts and retries. Uncertain delivery is never retried automatically. |
-| `RESEND_API_KEY` | Secret used only when `EMAIL_PROVIDER=resend`; that provider is optional and may require paid infrastructure. |
+| Variable | Meaning | Default |
+|---|---|---|
+| `LLM_API_KEY` | Provider key | Unset disables enrichment |
+| `LLM_MODEL` | OpenAI-compatible model name | `openrouter/free` in hosted workflow |
+| `LLM_BASE_URL` | Provider API root | Set by deployment configuration |
+| `LLM_TIMEOUT_SECONDS` | Request timeout | `20` |
+| `LLM_MAX_ATTEMPTS` | Bounded retries | `2` |
 
-Locally, SMTP passwords are stored in the Windows user's Credential Manager through `personal-news-agent email-credential-set`; they are not stored in `.env`. In cloud, inject `SMTP_PASSWORD` from the platform's secret store; the environment secret takes precedence over keyring. Install the optional local integration using the same Python 3.12 interpreter that Task Scheduler will invoke: `& $PythonExe -m pip install -e ".[windows-email]"`. For Google's account requirements and SMTP endpoint details, see [Google App Passwords](https://support.google.com/accounts/answer/185833) and [Gmail SMTP settings](https://support.google.com/mail/answer/7104828).
+When the key is absent or the provider fails, source descriptions provide fallback summaries. No LLM facts are added to the Fact of the Day; that section quotes a short source-provided excerpt with its link.
 
-## Validation behavior
+## Time and output
 
-`personal-news-agent config-check` validates local configuration without connecting to RSS sources, SMTP, OpenRouter, Resend, or the database. It never returns secret values. Its `email_status` is `configured` only when a provider and required credential are available; otherwise it reports `not_configured_optional`. The `preview` command never sends email. Without `--with-ai`, it also does not call the LLM; with `--with-ai`, missing LLM configuration or provider failure uses the source-description fallback. A `send` run with no email credential generates and persists the newsletter locally, reports a preview delivery outcome, and does not attempt email.
+`NEWSLETTER_TIMEZONE` is an IANA timezone and defaults to UTC. Production and local scheduling use `Asia/Kolkata`. `APP_CONFIG_DIR` and `PREVIEW_DIRECTORY` can override the configuration and preview paths. `PYTHON_EXE` is used by the Windows scheduler wrapper.
 
-Run `personal-news-agent database-init` to create the selected schema safely and repeatedly. SQLite is used locally; the cloud production workflow explicitly selects PostgreSQL and fails rather than falling back if its URL or database is unavailable. See [cloud deployment](cloud-deployment.md).
+The scheduled newspaper does not require SQLite, PostgreSQL, Neon, or Docker. Preview artifacts are local files and are not uploaded by GitHub Actions.

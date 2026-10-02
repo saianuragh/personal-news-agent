@@ -10,14 +10,19 @@ def test_cloud_workflow_schedules_ist_and_supports_manual_production_runs() -> N
     assert workflow["on"]["schedule"][0]["cron"] == "30 1 * * *"
     assert "workflow_dispatch" in workflow["on"]
     job = workflow["jobs"]["send-newsletter"]
-    assert job["env"]["DATABASE_BACKEND"] == "postgres"
-    assert "${{ secrets.NEWS_AGENT_DATABASE_URL }}" == job["env"]["DATABASE_URL"]
     assert "${{ secrets.SMTP_PASSWORD }}" == job["env"]["SMTP_PASSWORD"]
+    assert "${{ secrets.NEWSLETTER_RECIPIENT }}" == job["env"]["NEWSLETTER_RECIPIENT"]
+    assert "${{ secrets.SMTP_USERNAME }}" == job["env"]["SMTP_USERNAME"]
+    assert "${{ secrets.EMAIL_FROM }}" == job["env"]["EMAIL_FROM"]
+    assert not any("DATABASE" in name for name in job["env"])
+    assert (
+        "${{ secrets.NEWS_AGENT_DATABASE_URL }}"
+        not in workflow["jobs"]["send-newsletter"]["env"].values()
+    )
     commands = [step["run"] for step in job["steps"] if "run" in step]
     assert commands == [
         "python -m pip install .",
         "personal-news-agent config-check",
-        "personal-news-agent database-init",
         "personal-news-agent send",
     ]
     assert "default_branch" in job["if"]

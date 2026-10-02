@@ -7,7 +7,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.database.factory import create_run_repository, repository_backend
 from app.email.base import EmailSettings, SMTPSettings
 from app.email.credentials import smtp_credential_configured
 from app.pipeline.runner import PipelineDependencies, _load_configuration
@@ -17,7 +16,6 @@ from app.pipeline.runner import PipelineDependencies, _load_configuration
 class RuntimeConfigurationSummary:
     """Safe configuration facts; never contains credential values."""
 
-    database_backend: str
     enabled_source_count: int
     timezone_name: str
     llm_configured: bool
@@ -34,12 +32,11 @@ def validate_send_configuration(
 ) -> RuntimeConfigurationSummary:
     """Validate send configuration without connecting to external services."""
     values = os.environ if environ is None else environ
-    repository = create_run_repository(values)
     configuration = _load_configuration(
         Path(config_directory),
         mode="send",
         ai_in_preview=False,
-        dependencies=PipelineDependencies(run_repository=repository),
+        dependencies=PipelineDependencies(),
         environ=values,
     )
     enabled_count = sum(source.enabled for source in configuration.sources)
@@ -58,7 +55,6 @@ def validate_send_configuration(
         credential_configured = False
     email_configured = email_settings is not None and credential_configured
     return RuntimeConfigurationSummary(
-        database_backend=repository_backend(repository),
         enabled_source_count=enabled_count,
         timezone_name=configuration.timezone_name,
         llm_configured=configuration.llm_settings is not None,

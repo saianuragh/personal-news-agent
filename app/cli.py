@@ -13,7 +13,6 @@ from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 
-from app.database.factory import create_run_repository, repository_backend
 from app.email.base import newsletter_idempotency_key
 from app.email.credentials import (
     keyring_dependency_available,
@@ -100,7 +99,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        repository = create_run_repository()
+        repository = (
+            create_run_repository()
+            if args.mode in {"database-init", "runs", "delivery-reset"}
+            else None
+        )
         if args.mode == "delivery-reset":
             try:
                 if len(args.date) != 10 or args.date[4] != "-" or args.date[7] != "-":
@@ -305,6 +308,20 @@ def _default_config_directory() -> Path:
         ).strip()
         or Path(__file__).resolve().parents[1] / "config"
     )
+
+
+def create_run_repository():
+    """Load optional local persistence only for explicit maintenance commands."""
+    from app.database.factory import create_run_repository as create_repository
+
+    return create_repository()
+
+
+def repository_backend(repository) -> str:
+    """Return the backend label for explicit local database maintenance output."""
+    from app.database.factory import repository_backend as get_backend
+
+    return get_backend(repository)
 
 
 def _default_preview_directory() -> Path:

@@ -2,7 +2,7 @@
 # whole-token/phrase boundaries. Add synonyms here instead of adding code branches.
 categories:
   - name: India
-    source_ids: []
+    source_ids: [guardian_india]
     source_tags: [India, Indian, India News]
     terms:
       - India
@@ -63,7 +63,7 @@ categories:
       - Gemini
 
   - name: Technology
-    source_ids: []
+    source_ids: [bbc_technology, guardian_technology]
     source_tags: [Technology, Tech, Software]
     terms:
       - technology
@@ -83,7 +83,7 @@ categories:
       - data breach
 
   - name: Business & Economy
-    source_ids: []
+    source_ids: [bbc_business, guardian_business]
     source_tags: [Business, Economy, Economics, Finance]
     terms:
       - business
@@ -108,7 +108,7 @@ categories:
       - recession
 
   - name: Science & Space
-    source_ids: []
+    source_ids: [bbc_science, guardian_science]
     source_tags: [Science, Space, Astronomy]
     terms:
       - science
@@ -129,7 +129,7 @@ categories:
       - biology
 
   - name: Sports
-    source_ids: []
+    source_ids: [bbc_sport, guardian_sport]
     source_tags: [Sport, Sports]
     terms:
       - sport
@@ -149,7 +149,7 @@ categories:
       - Grand Slam
 
   - name: Entertainment
-    source_ids: []
+    source_ids: [bbc_entertainment, guardian_film]
     source_tags: [Entertainment, Film, Music]
     terms:
       - entertainment

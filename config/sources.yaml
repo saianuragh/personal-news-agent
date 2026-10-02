@@ -1,25 +1,133 @@
-# Add or disable supported sources here without changing adapter code.
-# Enabled feeds use the same generic RSS/Atom adapter.
+# Reliable free RSS feeds grouped around the newspaper's editorial sections.
+# Feeds are independently fault-tolerant; one outage does not block other sections.
 sources:
   - source_id: bbc_world
     enabled: true
     name: BBC News
     kind: rss_atom
     endpoint: https://feeds.bbci.co.uk/news/world/rss.xml
-    categories:
-      - World
+    categories: [World]
     quality_weight: 1.0
     timeout_seconds: 10
-    request_interval_seconds: 60
+    request_interval_seconds: 1
     language: en
   - source_id: guardian_world
     enabled: true
     name: The Guardian
     kind: rss_atom
     endpoint: https://www.theguardian.com/world/rss
-    categories:
-      - World
+    categories: [World]
     quality_weight: 0.9
     timeout_seconds: 10
-    request_interval_seconds: 60
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_india
+    enabled: true
+    name: The Guardian India
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/world/india/rss
+    categories: [India]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: bbc_technology
+    enabled: true
+    name: BBC News Technology
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/news/technology/rss.xml
+    categories: [Technology]
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_technology
+    enabled: true
+    name: The Guardian Technology
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/technology/rss
+    categories: [Technology]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: bbc_business
+    enabled: true
+    name: BBC News Business
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/news/business/rss.xml
+    categories: [Business & Economy]
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_business
+    enabled: true
+    name: The Guardian Business
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/business/rss
+    categories: [Business & Economy]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: bbc_science
+    enabled: true
+    name: BBC News Science & Environment
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/news/science_and_environment/rss.xml
+    categories: [Science & Space]
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_science
+    enabled: true
+    name: The Guardian Science
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/science/rss
+    categories: [Science & Space]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: bbc_sport
+    enabled: true
+    name: BBC Sport
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/sport/rss.xml
+    categories: [Sports]
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_sport
+    enabled: true
+    name: The Guardian Sport
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/sport/rss
+    categories: [Sports]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: bbc_entertainment
+    enabled: true
+    name: BBC News Entertainment & Arts
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml
+    categories: [Entertainment]
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 1
+    language: en
+  - source_id: guardian_film
+    enabled: true
+    name: The Guardian Film
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/film/rss
+    categories: [Entertainment]
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 1
     language: en

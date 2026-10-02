@@ -61,6 +61,7 @@ class _SourceDisplay:
     url: str
     published: str
     published_iso: str | None
+    description: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +145,7 @@ def render_newsletter(
                 published_iso=(
                     article.published_at.isoformat() if article.published_at is not None else None
                 ),
+                description=article.description,
             )
             for article in ordered_articles
         )
@@ -215,6 +217,7 @@ def render_newsletter(
     )
     count = len(displays)
     story_word = "story" if count == 1 else "stories"
+    addon_html, addon_text = _render_addons(displays, generated_at)
     template = Template(Path(template_path).read_text(encoding="utf-8"))
     html_body = template.substitute(
         title=escape(title),
@@ -232,6 +235,7 @@ def render_newsletter(
             if not displays
             else ""
         ),
+        addons=addon_html,
         featured=_render_html_story(displays[0], featured=True) if displays else "",
         feed=(
             "\n".join(_render_html_story(item, featured=False) for item in displays[1:])
@@ -258,6 +262,7 @@ def render_newsletter(
             "DAILY NEWS",
             local_date,
             f"Generated: {timestamp}",
+            *addon_text,
             "TODAY'S STORIES",
             *(text_sections or ["No eligible stories are available today. Check back soon."]),
             *category_indexes,
@@ -269,6 +274,130 @@ def render_newsletter(
         included_story_ids=tuple(item.story_id for item in displays),
         omitted_story_ids=tuple(omitted),
     )
+
+
+def _render_addons(
+    stories: list[_StoryDisplay], generated_at: datetime
+) -> tuple[str, list[str]]:
+    """Build editorial extras only from selected, source-linked stories."""
+    blocks: list[str] = []
+    text_blocks: list[str] = []
+
+    top_stories = stories[:5]
+    if top_stories:
+        cards: list[str] = []
+        text_lines = ["TOP STORIES"]
+        for number, story in enumerate(top_stories, 1):
+            source = story.sources[0]
+            why = story.why_it_matters
+            cards.append(
+                '<article class="addon-story"><p class="addon-number">'
+                f'{number:02d} · {escape(", ".join(story.categories))}</p>'
+                f'<h3><a href="{escape(source.url, quote=True)}">{escape(story.headline)}</a></h3>'
+                f'<p>{escape(story.summary)}</p>'
+                + (f'<p class="addon-why">Why it matters: {escape(why)}</p>' if why else "")
+                + f'<p class="addon-source">{escape(source.publisher)} · '
+                f'<a href="{escape(source.url, quote=True)}">Original report</a></p></article>'
+            )
+            text_lines.extend(
+                [
+                    f"{number:02d}. {story.headline}",
+                    story.summary,
+                    *([f"Why it matters: {why}"] if why else []),
+                    f"Source: {source.publisher} — {source.url}",
+                ]
+            )
+        blocks.append(_addon_section("TOP STORIES", "Five highest-ranked stories", cards))
+        text_blocks.append("\n".join(text_lines))
+
+    recent: list[_StoryDisplay] = []
+    cutoff = generated_at.timestamp() - 24 * 60 * 60
+    for story in stories:
+        published = story.sources[0].published_iso
+        if published:
+            try:
+                if datetime.fromisoformat(published).timestamp() >= cutoff:
+                    recent.append(story)
+            except ValueError:
+                continue
+        if len(recent) == 5:
+            break
+    if recent:
+        blocks.append(
+            _addon_section(
+                "IMPORTANT TODAY",
+                "Recent coverage prioritized by the story ranking",
+                [_addon_link_story(story) for story in recent],
+            )
+        )
+        text_blocks.append(
+            "IMPORTANT TODAY\n" + "\n".join(f"• {story.headline}" for story in recent)
+        )
+
+    ai_stories = [story for story in stories if "AI" in story.categories][:3]
+    if ai_stories:
+        blocks.append(
+            _addon_section(
+                "AI WATCH",
+                "Leading AI developments in today's coverage",
+                [_addon_link_story(story, include_summary=True) for story in ai_stories],
+            )
+        )
+        text_blocks.append(
+            "AI WATCH\n"
+            + "\n\n".join(f"{story.headline}\n{story.summary}" for story in ai_stories)
+        )
+
+    fact_story = next(
+        (
+            story
+            for story in stories
+            if story.sources[0].description and story.sources[0].description.strip()
+        ),
+        None,
+    )
+    if fact_story is not None:
+        source = fact_story.sources[0]
+        fact = _first_sentence(source.description or "")[:240]
+        if fact:
+            blocks.append(
+                '<section class="newspaper-addon"><p class="addon-label">FACT OF THE DAY</p>'
+                f'<p>{escape(fact)}</p><p class="addon-source">Source-reported · '
+                f'{escape(source.publisher)} · <a href="{escape(source.url, quote=True)}">'
+                "Original report</a></p></section>"
+            )
+            text_blocks.append(
+                f"FACT OF THE DAY\n{fact}\nSource-reported by {source.publisher}: {source.url}"
+            )
+
+    return "\n".join(blocks), text_blocks
+
+
+def _addon_section(label: str, subtitle: str, cards: list[str]) -> str:
+    return (
+        '<section class="newspaper-addon"><p class="addon-label">'
+        f'{escape(label)}</p><p class="addon-subtitle">{escape(subtitle)}</p>'
+        + "".join(cards)
+        + "</section>"
+    )
+
+
+def _addon_link_story(story: _StoryDisplay, *, include_summary: bool = False) -> str:
+    source = story.sources[0]
+    summary = f"<p>{escape(story.summary)}</p>" if include_summary else ""
+    return (
+        '<article class="addon-story"><h3>'
+        f'<a href="{escape(source.url, quote=True)}">{escape(story.headline)}</a></h3>'
+        f'{summary}<p class="addon-source">{escape(source.publisher)} · '
+        f'<a href="{escape(source.url, quote=True)}">Original report</a></p></article>'
+    )
+
+
+def _first_sentence(text: str) -> str:
+    """Keep a source-provided fact excerpt brief without generating new claims."""
+    cleaned = " ".join(text.split())
+    sentence_end = next((index for index, char in enumerate(cleaned) if char in ".!?"), -1)
+    return cleaned[: sentence_end + 1] if sentence_end >= 0 else cleaned
 
 
 def _render_html_story(

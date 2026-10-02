@@ -89,6 +89,30 @@ def test_html_and_plain_text_contain_story_fields_and_original_source_link() -> 
     assert result.included_story_ids == (item.story.story_id,)
 
 
+def test_newspaper_addons_are_source_grounded_and_market_snapshot_is_omitted() -> None:
+    item = ranked(
+        "New AI system helps researchers analyze satellite data",
+        categories=("AI", "Technology"),
+        description=(
+            "Researchers released a model that analyzes satellite images. "
+            "The report includes technical limitations."
+        ),
+    )
+
+    result = render([enriched(item)])
+
+    assert "TOP STORIES" in result.html
+    assert "IMPORTANT TODAY" in result.html
+    assert "AI WATCH" in result.html
+    assert "FACT OF THE DAY" in result.html
+    assert "Source-reported" in result.html
+    assert "Original report" in result.html
+    assert "MARKET SNAPSHOT" not in result.html
+    assert "BREAKING" not in result.html
+    assert "FACT OF THE DAY" in result.plain_text
+    assert "MARKET SNAPSHOT" not in result.plain_text
+
+
 def test_publication_and_generation_times_are_localized_without_fabrication() -> None:
     item = ranked(
         "Science mission update",
@@ -256,7 +280,9 @@ def test_multi_category_story_appears_in_each_dedicated_category_view() -> None:
 
     result = render([enriched(item)])
 
-    assert result.html.count("India announces new AI research program") == 3
+    # The headline appears in the home edition, Top Stories, Important Today,
+    # AI Watch, and both category views.
+    assert result.html.count("India announces new AI research program") == 6
     assert '<section class="newsletter-view category-view category-view-india">' in result.html
     assert '<section class="newsletter-view category-view category-view-ai">' in result.html
     assert 'id="category-india-story-01"' in result.html

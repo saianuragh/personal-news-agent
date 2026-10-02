@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -15,8 +16,10 @@ from app.database.postgres_runs import (
 )
 from app.database.sqlite_runs import SQLitePipelineRunRepository
 from app.pipeline.runner import PipelineCounts, PipelineRunResult, StageFailure
+from app.runtime_config import validate_send_configuration
 
 AS_OF = datetime(2026, 10, 1, 5, tzinfo=UTC)
+ROOT = Path(__file__).resolve().parents[1]
 SECRET_URL = "postgresql://agent:db-password@example.invalid/news"
 
 
@@ -315,13 +318,13 @@ def test_connection_url_is_not_logged(monkeypatch, caplog):
     assert SECRET_URL not in caplog.text
 
 
-def test_cli_rejects_invalid_backend_before_pipeline_run(monkeypatch, capsys):
+def test_config_check_ignores_legacy_database_backend(monkeypatch):
     monkeypatch.setenv("DATABASE_BACKEND", "unsupported")
-
-    exit_code = main(["preview"])
-
-    assert exit_code == 2
-    assert '"status": "configuration_failed"' in capsys.readouterr().out
+    summary = validate_send_configuration(config_directory=ROOT / "config", environ={
+        "DATABASE_BACKEND": "unsupported",
+        "EMAIL_PROVIDER": "smtp",
+    })
+    assert summary.enabled_source_count > 0
 
 
 def test_database_init_cli_explicitly_initializes_selected_repository(monkeypatch, capsys):

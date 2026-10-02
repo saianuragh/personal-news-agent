@@ -8,11 +8,13 @@ from app.config import SourceConfig, load_sources
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_loads_two_configured_real_sources_with_independent_settings() -> None:
+def test_loads_configured_real_feeds_for_the_newspaper_sections() -> None:
     sources = load_sources(ROOT / "config" / "sources.yaml")
 
-    assert len(sources) == 2
-    bbc, guardian = sources
+    assert len(sources) >= 12
+    by_id = {source.source_id: source for source in sources}
+    bbc = by_id["bbc_world"]
+    guardian = by_id["guardian_world"]
     assert (bbc.source_id, bbc.name, bbc.kind, bbc.endpoint) == (
         "bbc_world",
         "BBC News",
@@ -25,11 +27,16 @@ def test_loads_two_configured_real_sources_with_independent_settings() -> None:
         "rss_atom",
         "https://www.theguardian.com/world/rss",
     )
-    assert bbc.enabled is guardian.enabled is True
+    assert all(source.enabled for source in sources)
     assert bbc.categories == guardian.categories == ("World",)
     assert bbc.quality_weight == 1.0
     assert guardian.quality_weight == 0.9
     assert bbc.source_id != guardian.source_id
+    assert by_id["guardian_india"].categories == ("India",)
+    assert by_id["bbc_business"].categories == ("Business & Economy",)
+    assert by_id["bbc_science"].categories == ("Science & Space",)
+    assert by_id["bbc_sport"].categories == ("Sports",)
+    assert by_id["bbc_entertainment"].categories == ("Entertainment",)
 
 
 def test_rejects_unsupported_source_kind() -> None:

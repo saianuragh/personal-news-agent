@@ -22,8 +22,6 @@ jobs:
     timeout-minutes: 15
     env:
       APP_CONFIG_DIR: config
-      DATABASE_BACKEND: postgres
-      DATABASE_URL: ${{ secrets.NEWS_AGENT_DATABASE_URL }}
       NEWSLETTER_TIMEZONE: Asia/Kolkata
       NEWSLETTER_RECIPIENT: ${{ secrets.NEWSLETTER_RECIPIENT }}
       EMAIL_PROVIDER: smtp
@@ -55,9 +53,6 @@ jobs:
 
       - name: Validate non-interactive send configuration
         run: personal-news-agent config-check
-
-      - name: Initialize persistent PostgreSQL schema
-        run: personal-news-agent database-init
 
       - name: Run the production newsletter pipeline
         run: personal-news-agent send

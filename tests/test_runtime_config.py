@@ -26,7 +26,6 @@ def test_send_config_check_returns_only_safe_metadata(tmp_path):
         environ=valid_send_environment(tmp_path / "runs.sqlite3"),
     )
 
-    assert summary.database_backend == "sqlite"
     assert summary.enabled_source_count >= 1
     assert summary.timezone_name == "UTC"
     assert summary.llm_configured
@@ -83,7 +82,6 @@ def test_send_config_check_accepts_cloud_smtp_environment_secret(tmp_path):
         config_directory=Path(__file__).parents[1] / "config", environ=environment
     )
 
-    assert summary.database_backend == "postgres"
     assert summary.email_configured
     assert summary.email_credential_configured
     assert "smtp-test-secret-not-real" not in repr(summary)
@@ -142,6 +140,6 @@ def test_cli_config_check_never_displays_secret_values(monkeypatch, capsys, tmp_
     output = capsys.readouterr().out
 
     assert '"status": "configuration_valid"' in output
-    assert '"database_backend": "sqlite"' in output
+    assert '"database_backend"' not in output
     assert '"email_status": "configured"' in output
     assert all(secret not in output for secret in secrets.values())

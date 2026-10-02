@@ -54,6 +54,17 @@
       .back-row { margin:21px 0 0; padding:0; border-top:1px solid #d7d3cc; }
       .back-to-home { display:inline-block; padding:13px 0; color:#5f5f5f!important; font-size:10px; font-weight:bold; letter-spacing:.8px; text-decoration:none; }
       .back-to-home:hover { color:#b3261e!important; }
+      .newspaper-addon { margin:0 0 20px; padding:16px 0; border-top:2px solid #b3261e; border-bottom:1px solid #d7d3cc; }
+      .addon-label { margin:0 0 5px; color:#b3261e; font-family:Georgia,'Times New Roman',serif; font-size:19px; font-weight:bold; }
+      .addon-subtitle { margin:0 0 13px; color:#5f5f5f; font-size:11px; line-height:1.5; }
+      .addon-story { margin:0 0 12px; padding:0 0 10px; border-bottom:1px solid #ece8e1; }
+      .addon-story:last-child { margin-bottom:0; padding-bottom:0; border-bottom:0; }
+      .addon-story h3 { margin:0 0 5px; font-family:Georgia,'Times New Roman',serif; font-size:16px; line-height:1.3; }
+      .addon-story h3 a { color:#111111!important; text-decoration:none; }
+      .addon-story p { margin:4px 0; color:#333333; font-size:12px; line-height:1.55; }
+      .addon-number,.addon-source { color:#666666!important; font-size:9px!important; }
+      .addon-why { border-left:2px solid #b3261e; padding-left:8px; }
+      .addon-source a { color:#b3261e!important; }
       .footer { padding:18px 31px 23px; border-top:1px solid #d7d3cc; color:#5f5f5f; font-size:10px; line-height:1.6; }
       .footer-brand { margin:0 0 5px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:13px; font-weight:bold; }
       @media only screen and (max-width:520px) {
@@ -92,6 +103,7 @@
                 <main class="edition-content">
                   <div class="newsletter-view home-view">
                     <p class="section-label">TODAY'S STORIES</p>
+                    $addons
                     $featured
                     $empty_notice
                     $feed
