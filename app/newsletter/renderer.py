@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from string import Template
 from uuid import UUID
@@ -15,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.llm.base import AIEnrichedStory
 
-DEFAULT_TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "newsletter.html"
+DEFAULT_TEMPLATE = files("app.newsletter").joinpath("templates", "newsletter.html")
 SECTION_ORDER = (
     "India",
     "World",
@@ -84,7 +86,7 @@ def render_newsletter(
     generated_at: datetime,
     timezone_name: str,
     title: str = "Personal News Briefing",
-    template_path: str | Path = DEFAULT_TEMPLATE,
+    template_path: str | Path | Traversable = DEFAULT_TEMPLATE,
 ) -> NewsletterDocument:
     """Render selected enriched stories without fetching or mutating pipeline data.
 
@@ -218,7 +220,12 @@ def render_newsletter(
     count = len(displays)
     story_word = "story" if count == 1 else "stories"
     addon_html, addon_text = _render_addons(displays, generated_at)
-    template = Template(Path(template_path).read_text(encoding="utf-8"))
+    template_source = (
+        template_path.read_text(encoding="utf-8")
+        if not isinstance(template_path, str)
+        else Path(template_path).read_text(encoding="utf-8")
+    )
+    template = Template(template_source)
     html_body = template.substitute(
         title=escape(title),
         generated_at=escape(timestamp),

@@ -89,6 +89,21 @@ def test_html_and_plain_text_contain_story_fields_and_original_source_link() -> 
     assert result.included_story_ids == (item.story.story_id,)
 
 
+def test_packaged_template_renders_outside_the_repository_working_directory(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = render([])
+
+    assert "<!doctype html>" in result.html.casefold()
+    assert "Personal News Briefing" in result.html
+    assert "No eligible stories are available today." in result.html
+    assert "DAILY NEWS" in result.plain_text
+    assert "TODAY'S STORIES" in result.plain_text
+    assert "No eligible stories are available today." in result.plain_text
+
+
 def test_newspaper_addons_are_source_grounded_and_market_snapshot_is_omitted() -> None:
     item = ranked(
         "New AI system helps researchers analyze satellite data",

@@ -1,1 +1,1 @@
-"""Newsletter item rendering."""
+"""Newsletter generation and rendering resources."""
