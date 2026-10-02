@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Sanitized BBC World Sample</title>
+    <language>en-GB</language>
+    <item>
+      <title>Sample world headline</title>
+      <link>https://EXAMPLE.com/world/story-1?utm_source=rss&amp;id=1#top</link>
+      <pubDate>Tue, 29 Sep 2026 08:30:00 GMT</pubDate>
+      <description>&lt;p&gt;A sanitized &amp;amp; short description.&lt;/p&gt;</description>
+      <category>World</category>
+      <category>Policy</category>
+    </item>
+    <item>
+      <title>Headline with optional metadata missing</title>
+      <link>https://example.com/world/story-2</link>
+    </item>
+    <item>
+      <link>https://example.com/world/missing-title</link>
+      <pubDate>not a valid date</pubDate>
+    </item>
+    <item>
+      <title>Headline with invalid URL</title>
+      <link>javascript:alert(1)</link>
+      <pubDate>Tue, 29 Sep 2026 09:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Headline with invalid publication date</title>
+      <link>https://example.com/world/invalid-date</link>
+      <pubDate>not a valid date</pubDate>
+    </item>
+  </channel>
+</rss>

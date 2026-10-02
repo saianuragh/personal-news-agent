@@ -1,0 +1,63 @@
+name: Daily Newsletter
+
+on:
+  # GitHub Actions schedules use UTC: 01:30 UTC is 07:00 Asia/Kolkata.
+  schedule:
+    - cron: "30 1 * * *"
+  # Runs the same production path as schedule and can send a real newsletter.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-newsletter-production
+  cancel-in-progress: false
+
+jobs:
+  send-newsletter:
+    # Do not expose production secrets to code dispatched from a feature branch.
+    if: github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      APP_CONFIG_DIR: config
+      DATABASE_BACKEND: postgres
+      DATABASE_URL: ${{ secrets.NEWS_AGENT_DATABASE_URL }}
+      NEWSLETTER_TIMEZONE: Asia/Kolkata
+      NEWSLETTER_RECIPIENT: ${{ secrets.NEWSLETTER_RECIPIENT }}
+      EMAIL_PROVIDER: smtp
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "587"
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: openrouter/free
+      LLM_BASE_URL: https://openrouter.ai/api/v1
+      LLM_TIMEOUT_SECONDS: "20"
+      LLM_MAX_ATTEMPTS: "2"
+      EMAIL_TIMEOUT_SECONDS: "20"
+      EMAIL_MAX_ATTEMPTS: "2"
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the application
+        run: python -m pip install .
+
+      - name: Validate non-interactive send configuration
+        run: personal-news-agent config-check
+
+      - name: Initialize persistent PostgreSQL schema
+        run: personal-news-agent database-init
+
+      - name: Run the production newsletter pipeline
+        run: personal-news-agent send

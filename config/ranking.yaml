@@ -1,0 +1,28 @@
+# Initial transparent weights for the once-daily briefing.
+# Freshness leads because this is a current-news digest; source quality is a
+# reviewed prior, with topic fit and independent corroboration also contributing.
+weights:
+  freshness: 0.40
+  source_quality: 0.25
+  category_relevance: 0.20
+  corroboration: 0.15
+
+# Linear freshness decay reaches zero at this age. It changes ranking weight;
+# the runner does not discard older items with a publication-time filter.
+freshness_window_hours: 72
+
+# One publisher adds no corroboration bonus. Two yield half and three or more
+# reach the cap, preventing large clusters from dominating by volume.
+independent_publisher_cap: 3
+
+# Headline and publisher category matches are direct topic evidence. A source
+# routing hint is weaker; a description match is less prominent than a headline.
+category_evidence_weights:
+  source_id: 0.75
+  source_category: 1.0
+  title: 1.0
+  description: 0.6
+
+
+
+

@@ -1,0 +1,25 @@
+# Add or disable supported sources here without changing adapter code.
+# Enabled feeds use the same generic RSS/Atom adapter.
+sources:
+  - source_id: bbc_world
+    enabled: true
+    name: BBC News
+    kind: rss_atom
+    endpoint: https://feeds.bbci.co.uk/news/world/rss.xml
+    categories:
+      - World
+    quality_weight: 1.0
+    timeout_seconds: 10
+    request_interval_seconds: 60
+    language: en
+  - source_id: guardian_world
+    enabled: true
+    name: The Guardian
+    kind: rss_atom
+    endpoint: https://www.theguardian.com/world/rss
+    categories:
+      - World
+    quality_weight: 0.9
+    timeout_seconds: 10
+    request_interval_seconds: 60
+    language: en

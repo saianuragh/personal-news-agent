@@ -1,0 +1,172 @@
+# Deterministic category signals. Matching is case-insensitive and uses
+# whole-token/phrase boundaries. Add synonyms here instead of adding code branches.
+categories:
+  - name: India
+    source_ids: []
+    source_tags: [India, Indian, India News]
+    terms:
+      - India
+      - Indian
+      - New Delhi
+      - Delhi
+      - Mumbai
+      - Bengaluru
+      - Bangalore
+      - Chennai
+      - Kolkata
+      - Lok Sabha
+      - Rajya Sabha
+      - Narendra Modi
+      - Reserve Bank of India
+      - Supreme Court of India
+
+  - name: World
+    source_ids: [bbc_world, guardian_world]
+    source_tags: [World, International, Global Affairs]
+    terms:
+      - international affairs
+      - foreign policy
+      - United Nations
+      - NATO
+      - Ukraine
+      - Russia
+      - Gaza
+      - Israel
+      - Iran
+      - European Union
+      - Middle East
+      - North Korea
+      - South Korea
+      - Taiwan
+      - global summit
+      - world leaders
+
+  - name: AI
+    source_ids: []
+    source_tags: [AI, Artificial Intelligence, Machine Learning]
+    terms:
+      - AI
+      - artificial intelligence
+      - machine learning
+      - deep learning
+      - neural network
+      - generative AI
+      - large language model
+      - large language models
+      - LLM
+      - LLMs
+      - OpenAI
+      - Anthropic
+      - DeepMind
+      - ChatGPT
+      - Claude
+      - Gemini
+
+  - name: Technology
+    source_ids: []
+    source_tags: [Technology, Tech, Software]
+    terms:
+      - technology
+      - tech
+      - software
+      - cybersecurity
+      - semiconductor
+      - semiconductors
+      - smartphone
+      - smartphones
+      - cloud computing
+      - robotics
+      - operating system
+      - app store
+      - processor
+      - processors
+      - data breach
+
+  - name: Business & Economy
+    source_ids: []
+    source_tags: [Business, Economy, Economics, Finance]
+    terms:
+      - business
+      - economy
+      - economic
+      - inflation
+      - GDP
+      - earnings
+      - stock market
+      - interest rate
+      - interest rates
+      - central bank
+      - trade deficit
+      - revenue
+      - layoffs
+      - merger
+      - acquisition
+      - jobs report
+      - budget
+      - share price
+      - unemployment
+      - recession
+
+  - name: Science & Space
+    source_ids: []
+    source_tags: [Science, Space, Astronomy]
+    terms:
+      - science
+      - scientific
+      - scientist
+      - scientists
+      - research study
+      - NASA
+      - ISRO
+      - space
+      - telescope
+      - astronomy
+      - planet
+      - planets
+      - moon mission
+      - climate research
+      - physics
+      - biology
+
+  - name: Sports
+    source_ids: []
+    source_tags: [Sport, Sports]
+    terms:
+      - sport
+      - sports
+      - cricket
+      - football
+      - soccer
+      - tennis
+      - Olympics
+      - Formula One
+      - Formula 1
+      - F1
+      - NBA
+      - World Cup
+      - tournament
+      - championship
+      - Grand Slam
+
+  - name: Entertainment
+    source_ids: []
+    source_tags: [Entertainment, Film, Music]
+    terms:
+      - entertainment
+      - film
+      - films
+      - movie
+      - movies
+      - cinema
+      - music
+      - album
+      - singer
+      - actor
+      - actress
+      - streaming
+      - Netflix
+      - award
+      - awards
+      - box office
+      - television
+      - celebrity

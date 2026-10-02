@@ -1,0 +1,1 @@
+"""Newsletter item rendering."""

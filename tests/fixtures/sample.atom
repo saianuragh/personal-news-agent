@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+  <title>Sanitized Atom Sample</title>
+  <entry>
+    <title>Sample Atom headline</title>
+    <link rel="alternate" href="https://example.com/atom/story-1?utm_campaign=sample&amp;ref=42#section" />
+    <published>2026-09-29T13:45:00+05:30</published>
+    <summary type="html">&lt;p&gt;Atom summary text&lt;/p&gt;</summary>
+    <category term="Science" />
+  </entry>
+  <entry>
+    <title>Atom entry without publication date</title>
+    <link href="https://example.com/atom/story-2" />
+  </entry>
+</feed>

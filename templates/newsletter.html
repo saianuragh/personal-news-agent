@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>$title</title>
+    <style>
+      body { margin:0; padding:0; background:#f7f5f0; color:#111111; font-family:Arial,Helvetica,sans-serif; }
+      a { color:#b3261e; }
+      a:hover { color:#7f1d18; }
+      .page { width:100%; background:#f7f5f0; }
+      .container { width:100%; max-width:700px; margin:0 auto; background:#fffefa; }
+      .masthead { padding:29px 31px 23px; background:#fffefa; border-bottom:1px solid #111111; }
+      .masthead-grid { width:100%; border-collapse:collapse; }
+      .brand { margin:0; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:31px; font-weight:bold; letter-spacing:-.7px; }
+      .date { color:#5f5f5f; font-size:10px; font-weight:bold; letter-spacing:1px; text-align:right; }
+      .masthead-subtitle { margin:10px 0 0; color:#5f5f5f; font-size:10px; font-weight:bold; letter-spacing:1.6px; }
+      .edition { background:#fffefa; }
+      .view-state { display:block; height:0; max-height:0; overflow:hidden; line-height:0; font-size:0; }
+      .edition-nav { padding:7px 23px 0; background:#fffefa; border-bottom:1px solid #d7d3cc; }
+      .nav-link { display:inline-block; margin:0 9px 0 0; padding:13px 7px 12px; border-bottom:2px solid transparent; color:#333333!important; font-size:10px; font-weight:bold; letter-spacing:.65px; line-height:16px; text-decoration:none; }
+      .nav-link:hover { color:#b3261e!important; border-bottom-color:#b3261e; }
+      .today-link { color:#b3261e!important; }
+      .edition-content { padding:24px 31px 29px; background:#fffefa; }
+      .home-view { display:block; }
+      .category-view { display:none; }
+      $view_rules
+      .section-label,.view-kicker { margin:0 0 17px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:1.7px; }
+      .featured-card { margin:0 0 25px; padding:22px 0 24px; background:#fffefa; border-top:2px solid #b3261e; border-bottom:1px solid #d7d3cc; }
+      .feed-card { margin:0; padding:20px 0; background:transparent; border-bottom:1px solid #d7d3cc; }
+      .story-layout { width:100%; border-collapse:collapse; }
+      .story-number { width:55px; padding:1px 17px 0 0; color:#9a968f; font-family:Georgia,'Times New Roman',serif; font-size:27px; font-weight:bold; vertical-align:top; }
+      .featured-card .story-number { color:#b3261e; font-size:34px; }
+      .story-kicker { margin:0 0 8px; line-height:1.8; }
+      .top-story { display:inline-block; margin:0 8px 3px 0; color:#b3261e; font-size:9px; font-weight:bold; letter-spacing:1.4px; }
+      .category-badge { display:inline-block; margin:0 7px 3px 0; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.6px; }
+      .featured-card .category-badge { color:#b3261e; }
+      .story-title { margin:0 0 9px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:22px; line-height:1.25; letter-spacing:-.2px; }
+      .featured-card .story-title { max-width:590px; font-size:31px; line-height:1.14; letter-spacing:-.45px; }
+      .metadata { margin:0 0 13px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.75px; line-height:1.5; text-transform:uppercase; }
+      .summary-label { margin:0 0 5px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.7px; }
+      .summary { max-width:590px; margin:0 0 12px; color:#333333; font-size:14px; line-height:1.65; }
+      .why { max-width:590px; margin:13px 0; padding-left:11px; border-left:2px solid #b3261e; }
+      .why-label { margin:0 0 4px; color:#b3261e; font-size:9px; font-weight:bold; letter-spacing:1px; }
+      .why p:last-child { margin:0; color:#5f5f5f; font-size:12px; line-height:1.55; }
+      .story-cta { display:inline-block; margin:5px 0 0; padding:10px 0; border-bottom:1px solid #b3261e; color:#b3261e!important; font-size:10px; font-weight:bold; letter-spacing:.8px; text-decoration:none; }
+      .story-cta:hover { color:#7f1d18!important; border-bottom-width:2px; }
+      .additional-sources { margin:8px 0 0; font-size:10px; line-height:1.6; }
+      .source-link { margin-right:12px; color:#5f5f5f; }
+      .empty-state,.empty-category { margin:0; padding:18px 0; border-top:1px solid #d7d3cc; border-bottom:1px solid #d7d3cc; color:#5f5f5f; font-size:14px; line-height:1.6; }
+      .category-title { margin:0 0 12px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:34px; line-height:1.1; }
+      .view-subtitle { margin:0 0 22px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:1.5px; }
+      .back-row { margin:21px 0 0; padding:0; border-top:1px solid #d7d3cc; }
+      .back-to-home { display:inline-block; padding:13px 0; color:#5f5f5f!important; font-size:10px; font-weight:bold; letter-spacing:.8px; text-decoration:none; }
+      .back-to-home:hover { color:#b3261e!important; }
+      .footer { padding:18px 31px 23px; border-top:1px solid #d7d3cc; color:#5f5f5f; font-size:10px; line-height:1.6; }
+      .footer-brand { margin:0 0 5px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:13px; font-weight:bold; }
+      @media only screen and (max-width:520px) {
+        .masthead { padding:23px 18px 18px; }
+        .brand { font-size:28px; }
+        .date { font-size:9px; }
+        .edition-nav { padding:5px 13px 0; }
+        .nav-link { margin-right:4px; padding:13px 6px 11px; }
+        .edition-content { padding:20px 17px 24px; }
+        .story-number { width:41px; padding-right:10px; font-size:23px; }
+        .featured-card .story-number { font-size:29px; }
+        .story-title { font-size:20px; }
+        .featured-card .story-title { font-size:27px; }
+        .summary { font-size:14px; }
+        .featured-card { padding-top:18px; }
+        .footer { padding-right:18px; padding-left:18px; }
+      }
+    </style>
+  </head>
+  <body style="margin:0;background:#f7f5f0;color:#111111;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" class="page" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f7f5f0;">
+      <tbody><tr><td align="center">
+        <table role="presentation" class="container" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:700px;background:#fffefa;">
+          <tbody>
+            <tr><td class="masthead" id="newsletter-top" style="padding:29px 31px 23px;background:#fffefa;border-bottom:1px solid #111111;">
+              <table role="presentation" class="masthead-grid"><tbody><tr>
+                <td><p class="brand">DAILY NEWS</p></td>
+                <td class="date">$local_date</td>
+              </tr></tbody></table>
+              <p class="masthead-subtitle">THE DAY'S MOST IMPORTANT STORIES · $count $story_word</p>
+            </td></tr>
+            <tr><td>
+              <div class="edition">
+                $view_states
+                <nav class="edition-nav" aria-label="Home and category views">$navigation</nav>
+                <main class="edition-content">
+                  <div class="newsletter-view home-view">
+                    <p class="section-label">TODAY'S STORIES</p>
+                    $featured
+                    $empty_notice
+                    $feed
+                  </div>
+                  $categories
+                </main>
+              </div>
+            </td></tr>
+            <tr><td class="footer">
+              <p class="footer-brand">DAILY NEWS</p>
+              <p style="margin:0 0 5px;">Your personal daily intelligence briefing.</p>
+              <p style="margin:0 0 5px;"><time datetime="$generated_iso">Generated $generated_at</time></p>
+              <p style="margin:0;">Follow the source links for original reporting.</p>
+            </td></tr>
+          </tbody>
+        </table>
+      </td></tr></tbody>
+    </table>
+  </body>
+</html>
