@@ -8,7 +8,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from app.database.base import PipelineRunRepository
-from app.database.postgres_runs import PostgresPipelineRunRepository
 from app.database.sqlite_runs import SQLitePipelineRunRepository
 
 
@@ -32,12 +31,19 @@ def create_run_repository(
                 "DATABASE_URL must be a valid postgresql:// or postgres:// URL "
                 "when DATABASE_BACKEND=postgres"
             )
+        from app.database.postgres_runs import PostgresPipelineRunRepository
+
         return PostgresPipelineRunRepository(database_url)
     raise ValueError("DATABASE_BACKEND must be either 'sqlite' or 'postgres'")
 
 
 def repository_backend(repository: PipelineRunRepository) -> str:
     """Return a non-secret backend label for status output."""
+    if isinstance(repository, SQLitePipelineRunRepository):
+        return "sqlite"
+
+    from app.database.postgres_runs import PostgresPipelineRunRepository
+
     return "postgres" if isinstance(repository, PostgresPipelineRunRepository) else "sqlite"
 
 
