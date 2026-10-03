@@ -126,6 +126,7 @@ class StageFailure:
     provider_error_type: str | None = None
     provider_error_code: str | None = None
     attempt_count: int = 0
+    diagnostic_detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -474,6 +475,9 @@ class PipelineRunner:
                                             else None
                                         ),
                                         attempt_count=summary.attempt_count,
+                                        diagnostic_detail=_safe_llm_detail(
+                                            diagnostic.detail if diagnostic else None
+                                        ),
                                     )
                                 )
                         except Exception as error:
@@ -864,6 +868,7 @@ def _log_run_finished(result: PipelineRunResult, completed_at: datetime) -> None
                         "provider_error_code": failure.provider_error_code,
                         "attempt_count": failure.attempt_count,
                         "retry_count": max(0, failure.attempt_count - 1),
+                        "diagnostic_detail": failure.diagnostic_detail,
                     }
                     for failure in result.stage_failures
                 ],
@@ -888,11 +893,19 @@ def _log_llm_enrichment(
     if model_name and api_key and api_key in model_name:
         model_name = None
     failures: Counter[str] = Counter()
+    details: Counter[str] = Counter()
+    response_formats: Counter[str] = Counter()
+    for item in enriched:
+        if item.status == "generated" and item.response_format:
+            response_formats[item.response_format] += 1
     for failure in stage_failures:
         if failure.stage == "llm_configuration":
             failures[_safe_llm_category(failure.category)] += selected_count
         elif failure.stage == "summarization":
             failures[_safe_llm_category(failure.category)] += 1
+            detail = _safe_llm_detail(failure.diagnostic_detail)
+            if detail:
+                details[detail] += 1
     _LOGGER.info(
         "%s",
         json.dumps(
@@ -907,6 +920,8 @@ def _log_llm_enrichment(
                 "fallback_stories": sum(item.status == "fallback" for item in enriched),
                 "failed_stories": sum(item.status == "failed" for item in enriched),
                 "failure_categories": dict(sorted(failures.items())),
+                "failure_details": dict(sorted(details.items())),
+                "response_formats": dict(sorted(response_formats.items())),
             },
             sort_keys=True,
         ),
@@ -925,11 +940,26 @@ _LLM_CATEGORIES = {
     "unknown",
 }
 
+_LLM_DIAGNOSTIC_DETAILS = {
+    "empty_content",
+    "missing_choices",
+    "missing_content",
+    "malformed_json",
+    "malformed_provider_json",
+    "schema_mismatch",
+    "non_text_content",
+    "unusable_plain_text",
+}
+
 
 def _safe_llm_category(category: str | None) -> str:
     if category in {"rate_limiting"}:
         return "rate_limit"
     return category if category in _LLM_CATEGORIES else "unknown"
+
+
+def _safe_llm_detail(detail: str | None) -> str | None:
+    return detail if detail in _LLM_DIAGNOSTIC_DETAILS else None
 
 
 def _safe_llm_identifier(value: str | None) -> str | None:

@@ -792,7 +792,7 @@ def test_mixed_source_llm_and_database_chaos_run_isolated_safe_and_persisted(
         if headline == titles[2]:
             raise httpx.ReadTimeout(f"timeout {secret}", request=request)
         content = (
-            "malformed structured response"
+            '{"summary":'
             if headline == titles[3]
             else json.dumps(valid_payload)
         )
@@ -1175,7 +1175,7 @@ def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
         if headline == story_three:
             raise httpx.ReadTimeout(f"timeout {secret}", request=request)
         content = (
-            "not valid structured JSON"
+            '{"summary":'
             if headline == story_four
             else json.dumps(valid_response)
         )
@@ -1257,6 +1257,8 @@ def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
     assert enrichment["fallback_stories"] == 1
     assert enrichment["failed_stories"] == 1
     assert enrichment["failure_categories"] == {"invalid_response": 1, "timeout": 1}
+    assert enrichment["failure_details"] == {"malformed_json": 1}
+    assert enrichment["response_formats"] == {"structured_json": 3}
     captured_logs = " ".join(record.getMessage() for record in caplog.records)
     assert secret not in captured_logs
     assert story_two not in captured_logs

@@ -75,6 +75,7 @@ def test_valid_structured_response_converts_to_enriched_story() -> None:
     assert result.attempt_count == 1
     assert result.ranked_story is selected
     assert result.summary == VALID["summary"]
+    assert result.response_format == "structured_json"
     assert result.why_it_matters == VALID["why_it_matters"]
     assert result.uncertainty == tuple(VALID["uncertainty"])
     assert result.provider == "fake"
@@ -84,9 +85,44 @@ def test_valid_structured_response_converts_to_enriched_story() -> None:
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected_summary", "expected_why"),
+    [
+        (
+            "The agency announced a satellite mission that will expand Earth observation.",
+            "The agency announced a satellite mission that will expand Earth observation.",
+            None,
+        ),
+        (
+            "Summary: A satellite mission was announced.\n"
+            "Why it matters: It expands observation data.",
+            "A satellite mission was announced.",
+            "It expands observation data.",
+        ),
+    ],
+)
+def test_valid_plain_text_response_is_used_safely(
+    raw: str, expected_summary: str, expected_why: str | None
+) -> None:
+    result = Summarizer(FakeProvider([raw])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "generated"
+    assert result.response_format == "plain_text"
+    assert result.summary == expected_summary
+    assert result.why_it_matters == expected_why
+
+
+def test_unusable_short_plain_text_uses_source_fallback() -> None:
+    result = Summarizer(FakeProvider(["not json"])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.detail == "unusable_plain_text"
+
+
+@pytest.mark.parametrize(
     "raw",
     [
-        "not json",
+        '{"summary":',
         '{"summary":"only one field"}',
         '{"summary":"ok","why_it_matters":"ok","uncertainty":[],"extra":"no"}',
         '{"summary":"","why_it_matters":"valid","uncertainty":[]}',
@@ -157,7 +193,7 @@ def test_failure_without_source_description_is_explicitly_failed() -> None:
 
 
 def test_malformed_response_without_source_description_is_omitted() -> None:
-    result = Summarizer(FakeProvider(["not json"])).summarize(
+    result = Summarizer(FakeProvider(['{"summary":'])).summarize(
         ranked_story(description=None), generated_at=NOW
     )
 
@@ -204,6 +240,7 @@ def test_provider_builds_bounded_request_and_extracts_json_content() -> None:
     assert request_body["max_tokens"] == MAX_OUTPUT_TOKENS
     assert request_body["temperature"] == 0
     assert "Do not invent" in request_body["messages"][0]["content"]
+    assert "response_format" not in request_body
     assert "test-key" not in str(request_body)
     client.close()
 
@@ -332,12 +369,15 @@ def test_http_error_diagnostic_redacts_credentials_and_limits_message() -> None:
 
 
 def test_empty_provider_content_is_classified_and_falls_back() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}}]})
+
     client = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200, json={"choices": [{"message": {"content": ""}}]}
-            )
-        )
+        transport=httpx.MockTransport(handler)
     )
     provider = OpenAICompatibleProvider(
         LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
@@ -348,7 +388,30 @@ def test_empty_provider_content_is_classified_and_falls_back() -> None:
     assert result.status == "fallback"
     assert result.diagnostic is not None
     assert result.diagnostic.category == "empty_response"
-    assert result.attempt_count == 1
+    assert result.diagnostic.detail == "empty_content"
+    assert result.attempt_count == 2
+    assert attempts == 2
+    client.close()
+
+
+def test_empty_provider_content_retries_once_and_uses_recovery() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        content = "" if attempts == 1 else json.dumps(VALID)
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+    result = Summarizer(provider, max_attempts=2).summarize(ranked_story(), generated_at=NOW)
+
+    assert attempts == 2
+    assert result.status == "generated"
+    assert result.attempt_count == 2
     client.close()
 
 
@@ -365,7 +428,31 @@ def test_unexpected_provider_response_shape_is_classified_without_body() -> None
     assert result.status == "fallback"
     assert result.diagnostic is not None
     assert result.diagnostic.category == "invalid_response"
-    assert result.diagnostic.message == "LLM provider response shape was invalid."
+    assert result.diagnostic.detail == "missing_choices"
+    client.close()
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ({"choices": [{"message": {}}]}, "missing_content"),
+        ({"choices": []}, "missing_choices"),
+    ],
+)
+def test_missing_choices_or_content_has_specific_safe_diagnostic(body, detail: str) -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body))
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+
+    with pytest.raises(PermanentProviderError) as raised:
+        provider.complete("private prompt", max_output_tokens=MAX_OUTPUT_TOKENS)
+
+    assert raised.value.diagnostic is not None
+    assert raised.value.diagnostic.detail == detail
+    assert "private prompt" not in str(raised.value.diagnostic)
     client.close()
 
 
@@ -393,15 +480,17 @@ def test_schema_validation_failure_has_validation_category() -> None:
     assert result.status == "fallback"
     assert result.diagnostic is not None
     assert result.diagnostic.category == "validation_error"
+    assert result.diagnostic.detail == "schema_mismatch"
     assert result.attempt_count == 1
 
 
 def test_malformed_json_has_invalid_response_category() -> None:
-    result = Summarizer(FakeProvider(["not JSON"])).summarize(ranked_story(), generated_at=NOW)
+    result = Summarizer(FakeProvider(['{"summary":'])).summarize(ranked_story(), generated_at=NOW)
 
     assert result.status == "fallback"
     assert result.diagnostic is not None
     assert result.diagnostic.category == "invalid_response"
+    assert result.diagnostic.detail == "malformed_json"
 
 
 def test_api_key_is_excluded_from_settings_repr() -> None:

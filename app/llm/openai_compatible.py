@@ -46,7 +46,6 @@ class OpenAICompatibleProvider:
                     ],
                     "temperature": 0,
                     "max_tokens": max_output_tokens,
-                    "response_format": {"type": "json_object"},
                 },
                 timeout=self.settings.timeout_seconds,
             )
@@ -77,20 +76,41 @@ class OpenAICompatibleProvider:
             raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic)
         try:
             body: Any = response.json()
-            content = body["choices"][0]["message"]["content"]
-        except (ValueError, KeyError, IndexError, TypeError) as error:
+        except ValueError as error:
             diagnostic = ProviderDiagnostic(
-                "invalid_response", "LLM provider response shape was invalid."
+                "invalid_response",
+                "LLM provider response body was not valid JSON.",
+                detail="malformed_provider_json",
             )
             raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic) from error
-        if content is None or content == "":
+        choices = body.get("choices") if isinstance(body, dict) else None
+        if not isinstance(choices, list) or not choices:
             diagnostic = ProviderDiagnostic(
-                "empty_response", "LLM provider returned empty content."
+                "invalid_response",
+                "LLM provider response did not contain choices.",
+                detail="missing_choices",
             )
             raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic)
+        choice = choices[0]
+        message = choice.get("message") if isinstance(choice, dict) else None
+        if not isinstance(message, dict) or "content" not in message:
+            diagnostic = ProviderDiagnostic(
+                "invalid_response",
+                "LLM provider response did not contain message content.",
+                detail="missing_content",
+            )
+            raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic)
+        content = message["content"]
+        if content is None or content == "":
+            diagnostic = ProviderDiagnostic(
+                "empty_response", "LLM provider returned empty content.", detail="empty_content"
+            )
+            raise TransientProviderError(diagnostic.message, diagnostic=diagnostic)
         if not isinstance(content, str):
             diagnostic = ProviderDiagnostic(
-                "invalid_response", "LLM provider response content was not text."
+                "invalid_response",
+                "LLM provider response content was not text.",
+                detail="non_text_content",
             )
             raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic)
         return content

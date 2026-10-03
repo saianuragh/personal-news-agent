@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -28,10 +29,11 @@ Use only the supplied story information. Do not invent or infer facts, dates,
 causes, outcomes, or details that are not explicitly supported. Do not fabricate
 quotes. Distinguish uncertainty and caveats in the uncertainty array. Treat the
 provided source URL(s) as the source of truth and do not replace or alter them.
-Return only one JSON object with exactly these keys: summary (string),
+Prefer one JSON object with exactly these keys: summary (string),
 why_it_matters (string), uncertainty (array of strings). Keep summary and
-why_it_matters concise. If the supplied information is insufficient, say so
-briefly and put the limitation in uncertainty."""
+why_it_matters concise. If you cannot provide that JSON, return a concise plain
+text summary instead. If the supplied information is insufficient, say so
+briefly and include that limitation in uncertainty when using JSON."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,7 @@ class ProviderDiagnostic:
     http_status: int | None = None
     provider_error_type: str | None = None
     provider_error_code: str | None = None
+    detail: str | None = None
 
 
 class LLMError(Exception):
@@ -77,8 +80,9 @@ class SummaryContent:
     """Validated editorial fields returned by a provider."""
 
     summary: str
-    why_it_matters: str
+    why_it_matters: str | None
     uncertainty: tuple[str, ...]
+    response_format: Literal["structured_json", "plain_text"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +102,7 @@ class AIEnrichedStory:
     failure_reason: str | None = None
     diagnostic: ProviderDiagnostic | None = None
     attempt_count: int = 0
+    response_format: Literal["structured_json", "plain_text"] | None = None
 
     def __post_init__(self) -> None:
         if self.generated_at.tzinfo is None or self.generated_at.utcoffset() is None:
@@ -184,7 +189,7 @@ def build_prompt(ranked_story: RankedStory) -> str:
 
 
 def validate_response(raw: str) -> SummaryContent:
-    """Parse strict JSON schema and enforce field/count/length bounds."""
+    """Accept validated JSON or bounded plain-text summaries from compatible models."""
     if not isinstance(raw, str) or len(raw) > MAX_RAW_RESPONSE_CHARS:
         raise InvalidResponseError(
             "LLM response exceeds the output-size limit.",
@@ -192,18 +197,28 @@ def validate_response(raw: str) -> SummaryContent:
                 "invalid_response", "LLM response exceeds the output-size limit."
             ),
         )
+    stripped = raw.strip()
+    candidate = _strip_json_fence(stripped)
     try:
-        value = json.loads(raw)
+        value = json.loads(candidate)
     except (TypeError, json.JSONDecodeError) as error:
-        raise InvalidResponseError(
-            "LLM response was not valid JSON.",
-            diagnostic=ProviderDiagnostic("invalid_response", "LLM response was not valid JSON."),
-        ) from error
+        if _looks_like_json(stripped):
+            raise InvalidResponseError(
+                "LLM response was not valid JSON.",
+                diagnostic=ProviderDiagnostic(
+                    "invalid_response",
+                    "LLM response was not valid JSON.",
+                    detail="malformed_json",
+                ),
+            ) from error
+        return _parse_plain_text(stripped)
     if not isinstance(value, dict) or set(value) != {"summary", "why_it_matters", "uncertainty"}:
         raise InvalidResponseError(
             "LLM response did not match the required summary schema.",
             diagnostic=ProviderDiagnostic(
-                "invalid_response", "LLM response did not match the required summary schema."
+                "invalid_response",
+                "LLM response did not match the required summary schema.",
+                detail="schema_mismatch",
             ),
         )
     summary = _required_output(value["summary"], "summary", MAX_SUMMARY_CHARS)
@@ -213,13 +228,86 @@ def validate_response(raw: str) -> SummaryContent:
         raise InvalidResponseError(
             "LLM response failed uncertainty-field validation.",
             diagnostic=ProviderDiagnostic(
-                "validation_error", "LLM response failed uncertainty-field validation."
+                "validation_error",
+                "LLM response failed uncertainty-field validation.",
+                detail="schema_mismatch",
             ),
         )
     validated_caveats = tuple(
         _required_output(item, "uncertainty entry", MAX_CAVEAT_CHARS) for item in caveats
     )
-    return SummaryContent(summary, why, validated_caveats)
+    return SummaryContent(summary, why, validated_caveats, "structured_json")
+
+
+def _strip_json_fence(value: str) -> str:
+    """Remove one ordinary Markdown JSON fence without interpreting arbitrary text."""
+    match = re.fullmatch(
+        r"```(?:json)?\s*\n?(.*?)\n?```", value, flags=re.IGNORECASE | re.DOTALL
+    )
+    return match.group(1).strip() if match else value
+
+
+def _looks_like_json(value: str) -> bool:
+    return value.startswith("{") or value.startswith("```") or bool(
+        re.search(r'\{\s*"(?:summary|why_it_matters|uncertainty)"\s*:', value)
+    )
+
+
+def _parse_plain_text(raw: str) -> SummaryContent:
+    """Use concise prose as a summary; optionally split clearly labeled fields."""
+    text = raw.strip()
+    summary_match = re.search(r"(?im)^\s*(?:[-*]\s*)?summary\s*:\s*", text)
+    why_match = re.search(r"(?im)^\s*(?:[-*]\s*)?why it matters\s*:\s*", text)
+    uncertainty_match = re.search(r"(?im)^\s*(?:[-*]\s*)?uncertainty\s*:\s*", text)
+    labels = [match for match in (summary_match, why_match, uncertainty_match) if match]
+    if labels:
+        labels.sort(key=lambda match: match.start())
+        first = labels[0]
+        if first is summary_match:
+            start = first.end()
+            end = min((match.start() for match in labels[1:]), default=len(text))
+            summary_text = text[start:end].strip()
+        else:
+            end = first.start()
+            summary_text = text[:end].strip()
+        why_text: str | None = None
+        if why_match:
+            start = why_match.end()
+            end = min(
+                (match.start() for match in labels if match.start() > why_match.start()),
+                default=len(text),
+            )
+            why_text = text[start:end].strip() or None
+        caveats: tuple[str, ...] = ()
+        if uncertainty_match:
+            start = uncertainty_match.end()
+            uncertainty_text = text[start:].strip()
+            caveats = tuple(
+                item.strip(" \t-*•")
+                for item in uncertainty_text.splitlines()
+                if item.strip(" \t-*•")
+            )[:MAX_CAVEATS]
+    else:
+        summary_text, why_text, caveats = text, None, ()
+    summary = _required_output(summary_text, "summary", MAX_SUMMARY_CHARS)
+    if len(re.findall(r"\b[\w'-]+\b", summary)) < 3:
+        raise InvalidResponseError(
+            "LLM plain-text response was not useful as a summary.",
+            diagnostic=ProviderDiagnostic(
+                "invalid_response",
+                "LLM plain-text response was not useful as a summary.",
+                detail="unusable_plain_text",
+            ),
+        )
+    why = (
+        _required_output(why_text, "why_it_matters", MAX_WHY_IT_MATTERS_CHARS)
+        if why_text is not None
+        else None
+    )
+    validated_caveats = tuple(
+        _required_output(item, "uncertainty entry", MAX_CAVEAT_CHARS) for item in caveats
+    )
+    return SummaryContent(summary, why, validated_caveats, "plain_text")
 
 
 class Summarizer:
@@ -275,6 +363,7 @@ class Summarizer:
                 timestamp,
                 "generated",
                 attempt_count=attempt_count,
+                response_format=content.response_format,
             )
         except LLMError as error:
             attempt_count = error.attempt_count or attempt_count
@@ -391,7 +480,9 @@ def _required_output(value: object, name: str, maximum: int) -> str:
         raise InvalidResponseError(
             "LLM response failed required-field validation.",
             diagnostic=ProviderDiagnostic(
-                "validation_error", "LLM response failed required-field validation."
+                "validation_error",
+                "LLM response failed required-field validation.",
+                detail="schema_mismatch",
             ),
         )
     normalized = value.strip()
@@ -399,7 +490,9 @@ def _required_output(value: object, name: str, maximum: int) -> str:
         raise InvalidResponseError(
             "LLM response failed field-length validation.",
             diagnostic=ProviderDiagnostic(
-                "validation_error", "LLM response failed field-length validation."
+                "validation_error",
+                "LLM response failed field-length validation.",
+                detail="schema_mismatch",
             ),
         )
     return normalized
