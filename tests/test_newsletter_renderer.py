@@ -120,7 +120,7 @@ def test_minimal_header_and_story_link_to_original_article() -> None:
     assert 'href="https://news.example/item?a=1&amp;b=2"' in result.html
     assert parser.links.count("https://news.example/item?a=1&b=2") >= 2
     assert "Why it matters" not in result.html
-    top_story = result.html.split('<section class="category-section"', 1)[0]
+    top_story = result.html.split('<div class="category-section"', 1)[0]
     assert "A source description with useful reporting details." not in top_story
     assert "https://news.example/item?a=1&b=2" in result.plain_text
 
@@ -176,9 +176,9 @@ def test_top_five_is_compact_and_does_not_expand_all_selected_stories() -> None:
     ordered = rank_stories([item.ranked_story.categorized_story for item in items], as_of=GENERATED)
     by_id = {item.ranked_story.story.story_id: item for item in items}
     result = render([by_id[item.story.story_id] for item in ordered])
-    top_block = result.html.split('<section class="category-section"', 1)[0]
+    top_block = result.html.split('<div class="category-section"', 1)[0]
 
-    assert top_block.count('<article class="story') == 5
+    assert top_block.count('<div class="story') == 5
     assert "Technology headline number" in top_block
     assert "Why it matters" not in top_block
     assert len(result.included_story_ids) == 24
@@ -196,8 +196,8 @@ def test_each_category_displays_at_most_three_compact_source_linked_stories() ->
         marker = f'<h2 class="section-heading">{category}</h2>'
         if marker not in result.html:
             continue
-        block = result.html.split(marker, 1)[1].split("</section>", 1)[0]
-        assert block.count('<article class="story compact"') <= 3
+        block = result.html.split(marker, 1)[1].split("</div>", 1)[0]
+        assert block.count('<div class="story compact"') <= 3
         assert block.count("→ READ") <= 3
     assert "AI" in result.html
     assert "Business &amp; Economy" in result.html
@@ -210,7 +210,7 @@ def test_important_today_is_headlines_and_source_links_without_summaries() -> No
         for index in range(4)
     ]
     result = render(recent)
-    block = result.html.split("⚡ IMPORTANT TODAY", 1)[1].split("</section>", 1)[0]
+    block = result.html.split("⚡ IMPORTANT TODAY", 1)[1].split("</div>", 1)[0]
 
     assert sum(f"Recent headline {index}" in block for index in range(4)) == 3
     assert "summary" not in block
@@ -227,9 +227,9 @@ def test_ai_watch_is_limited_to_three_compact_items() -> None:
         for index in range(4)
     ]
     result = render(ai_items)
-    block = result.html.split("🤖 AI WATCH", 1)[1].split("</section>", 1)[0]
+    block = result.html.split("🤖 AI WATCH", 1)[1].split('<div class="footer"', 1)[0]
 
-    assert block.count('<article class="story compact"') == 3
+    assert block.count('<div class="story compact"') == 3
     assert sum(f"AI model development {index}" in block for index in range(4)) == 3
     assert "→ READ" in block
     parser = StoryParser()
@@ -241,7 +241,7 @@ def test_fact_of_day_is_one_source_sentence_and_market_snapshot_is_omitted() -> 
     description = "A source-reported fact. A second detail that should not appear. " * 8
     item = enriched(ranked("Science update", description=description))
     result = render([item])
-    block = result.html.split("🧠 FACT OF THE DAY", 1)[1].split("</section>", 1)[0]
+    block = result.html.split("🧠 FACT OF THE DAY", 1)[1].split("</div>", 1)[0]
 
     assert "A source-reported fact." in block
     assert "A second detail" not in block
@@ -281,6 +281,27 @@ def test_fallback_summary_is_compact_and_markup_is_escaped() -> None:
     assert "Source description (fallback)" not in result.plain_text
 
 
+def test_generated_and_fallback_summaries_are_capped_in_plain_text() -> None:
+    long_summary = "Concise source-based detail " * 20
+    items = [
+        enriched(ranked("Generated long summary"), summary=long_summary, status="generated"),
+        enriched(ranked("Fallback long summary"), summary=long_summary, status="fallback"),
+    ]
+    result = render(items)
+
+    for headline in ("Generated long summary", "Fallback long summary"):
+        block = next(
+            block
+            for block in result.plain_text.split("\n\n")
+            if headline in block.splitlines()
+        )
+        lines = block.splitlines()
+        summary = lines[2]
+        assert len(summary) <= SUMMARY_LIMIT
+        assert summary.endswith("…")
+    assert long_summary not in result.plain_text
+
+
 def test_plain_text_alternative_is_compact_and_links_to_original_articles() -> None:
     source_url = "https://news.example/plain-story"
     item = enriched(ranked("A fresh morning headline", url=source_url))
@@ -305,6 +326,11 @@ def test_mobile_email_layout_is_single_column_and_has_no_horizontal_sizing() -> 
     assert "<link rel=\"stylesheet\"" not in result.html
     assert "@import" not in result.html
     assert "javascript:" not in result.html
+    assert "<article" not in result.html
+    assert "<section" not in result.html
+    assert "<header" not in result.html
+    assert "<main" not in result.html
+    assert "<footer" not in result.html
 
 
 def test_html_is_parseable_and_empty_digest_omits_empty_optional_sections() -> None:

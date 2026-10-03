@@ -309,11 +309,11 @@ def _render_addons(
 
 def _addon_section(label: str, content: str) -> str:
     return (
-        '<section class="addon" style="margin-top:22px;padding-top:14px;'
+        '<div class="addon" style="margin-top:22px;padding-top:14px;'
         'border-top:1px solid #dedbd5"><h2 class="section-heading" '
         'style="margin:0 0 4px;color:#77736d;font-size:10px;font-weight:bold;'
         'letter-spacing:1.4px">'
-        f'{escape(label)}</h2>{content}</section>'
+        f'{escape(label)}</h2>{content}</div>'
     )
 
 
@@ -334,7 +334,7 @@ def _render_html_story(
     )
     class_name = "story lead" if featured else "story compact" if compact else "story"
     return (
-        f'<article class="{class_name}" style="padding:15px 0;'
+        f'<div class="{class_name}" style="padding:15px 0;'
         'border-bottom:1px solid #e7e3dc;">'
         f'<p class="category" style="margin:0;color:#9e2924;font-size:9px;font-weight:bold;'
         f'letter-spacing:1.2px">{escape(category.upper())}</p>'
@@ -349,7 +349,7 @@ def _render_html_story(
         f'<a class="read-more" style="display:inline-block;padding:5px 0;color:#9e2924;'
         f'font-size:10px;font-weight:bold;letter-spacing:.7px;text-decoration:none" '
         f'href="{escape(source.url, quote=True)}">'
-        f'{"→ READ" if compact else "READ MORE →"}</a></article>'
+        f'{"→ READ" if compact else "READ MORE →"}</a></div>'
     )
 
 
@@ -358,10 +358,10 @@ def _render_html_category(category: str, members: list[_StoryDisplay]) -> str:
         _render_html_story(display, featured=False, compact=True) for display in members[:3]
     )
     return (
-        '<section class="category-section" style="margin-top:20px">'
+        '<div class="category-section" style="margin-top:20px">'
         f'<h2 class="section-heading" style="margin:0;padding:14px 0 4px;border-top:1px solid '
         f'#dedbd5;color:#171717;font-family:Georgia,\'Times New Roman\',serif;font-size:17px">'
-        f'{escape(category)}</h2>{stories}</section>'
+        f'{escape(category)}</h2>{stories}</div>'
     )
 
 
