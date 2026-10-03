@@ -942,6 +942,10 @@ _LLM_CATEGORIES = {
 
 _LLM_DIAGNOSTIC_DETAILS = {
     "empty_content",
+    "empty_content_finish_stop",
+    "empty_content_finish_length",
+    "empty_content_finish_content_filter",
+    "empty_content_finish_tool_calls",
     "missing_choices",
     "missing_content",
     "malformed_json",

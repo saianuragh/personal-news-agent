@@ -46,6 +46,7 @@ class OpenAICompatibleProvider:
                     ],
                     "temperature": 0,
                     "max_tokens": max_output_tokens,
+                    "response_format": {"type": "json_object"},
                 },
                 timeout=self.settings.timeout_seconds,
             )
@@ -102,8 +103,20 @@ class OpenAICompatibleProvider:
             raise PermanentProviderError(diagnostic.message, diagnostic=diagnostic)
         content = message["content"]
         if content is None or content == "":
+            finish_reason = choice.get("finish_reason")
+            safe_finish_reason = (
+                finish_reason
+                if isinstance(finish_reason, str)
+                and finish_reason in {"stop", "length", "content_filter", "tool_calls"}
+                else None
+            )
+            detail = (
+                f"empty_content_finish_{safe_finish_reason}"
+                if safe_finish_reason
+                else "empty_content"
+            )
             diagnostic = ProviderDiagnostic(
-                "empty_response", "LLM provider returned empty content.", detail="empty_content"
+                "empty_response", "LLM provider returned empty content.", detail=detail
             )
             raise TransientProviderError(diagnostic.message, diagnostic=diagnostic)
         if not isinstance(content, str):

@@ -111,6 +111,45 @@ def test_valid_plain_text_response_is_used_safely(
     assert result.why_it_matters == expected_why
 
 
+def test_balanced_json_inside_harmless_prose_is_recovered() -> None:
+    response = 'Result follows:\n' + json.dumps(
+        {**VALID, "summary": 'A report quotes "new capacity" and {adds context}.'}
+    ) + "\nEnd of response."
+
+    result = Summarizer(FakeProvider([response])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "generated"
+    assert result.response_format == "structured_json"
+    assert result.summary == 'A report quotes "new capacity" and {adds context}.'
+
+
+def test_fenced_json_remains_supported() -> None:
+    result = Summarizer(FakeProvider([f"```json\n{json.dumps(VALID)}\n```"])).summarize(
+        ranked_story(), generated_at=NOW
+    )
+
+    assert result.status == "generated"
+    assert result.response_format == "structured_json"
+
+
+def test_missing_or_malformed_optional_fields_do_not_discard_valid_summary() -> None:
+    raw = json.dumps(
+        {
+            "summary": VALID["summary"],
+            "why_it_matters": "w" * 701,
+            "uncertainty": ["u" * 301, None],
+            "harmless_extra": "ignored",
+        }
+    )
+
+    result = Summarizer(FakeProvider([raw])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "generated"
+    assert result.summary == VALID["summary"]
+    assert result.why_it_matters is None
+    assert result.uncertainty == ()
+
+
 def test_unusable_short_plain_text_uses_source_fallback() -> None:
     result = Summarizer(FakeProvider(["not json"])).summarize(ranked_story(), generated_at=NOW)
 
@@ -123,11 +162,9 @@ def test_unusable_short_plain_text_uses_source_fallback() -> None:
     "raw",
     [
         '{"summary":',
-        '{"summary":"only one field"}',
-        '{"summary":"ok","why_it_matters":"ok","uncertainty":[],"extra":"no"}',
+        '{"why_it_matters":"missing summary","uncertainty":[]}',
         '{"summary":"","why_it_matters":"valid","uncertainty":[]}',
         json.dumps({**VALID, "summary": "s" * 701}),
-        json.dumps({**VALID, "uncertainty": ["c" * 301]}),
     ],
 )
 def test_malformed_missing_or_overlong_response_uses_labeled_fallback(raw: str) -> None:
@@ -240,7 +277,8 @@ def test_provider_builds_bounded_request_and_extracts_json_content() -> None:
     assert request_body["max_tokens"] == MAX_OUTPUT_TOKENS
     assert request_body["temperature"] == 0
     assert "Do not invent" in request_body["messages"][0]["content"]
-    assert "response_format" not in request_body
+    assert request_body["response_format"] == {"type": "json_object"}
+    assert "exactly one valid JSON object" in request_body["messages"][0]["content"]
     assert "test-key" not in str(request_body)
     client.close()
 
@@ -391,6 +429,32 @@ def test_empty_provider_content_is_classified_and_falls_back() -> None:
     assert result.diagnostic.detail == "empty_content"
     assert result.attempt_count == 2
     assert attempts == 2
+    client.close()
+
+
+def test_empty_content_preserves_safe_finish_reason_metadata() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": ""}, "finish_reason": "length"}
+                    ]
+                },
+            )
+        )
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+
+    result = Summarizer(provider, max_attempts=1).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "empty_response"
+    assert result.diagnostic.detail == "empty_content_finish_length"
     client.close()
 
 

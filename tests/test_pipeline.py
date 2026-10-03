@@ -1284,21 +1284,26 @@ def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(tmp_path:
     assert failure.message == "LLM provider rate limit was reached."
 
 
-def test_llm_rate_limit_falls_back_and_email_still_succeeds(tmp_path: Path) -> None:
+def test_all_llm_calls_fail_but_newspaper_email_still_succeeds(tmp_path: Path) -> None:
     config_dir = setup_config(tmp_path)
-    client = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                429,
-                json={
-                    "error": {
-                        "type": "rate_limit_error",
-                        "code": "rate_limit_exceeded",
-                        "message": "Private provider response text is not logged.",
-                    }
-                },
-            )
+    request_count = 0
+
+    def rate_limited(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "rate_limit_error",
+                    "code": "rate_limit_exceeded",
+                    "message": "Private provider response text is not logged.",
+                }
+            },
         )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(rate_limited)
     )
     summarizer = Summarizer(
         OpenAICompatibleProvider(
@@ -1308,8 +1313,16 @@ def test_llm_rate_limit_falls_back_and_email_still_succeeds(tmp_path: Path) -> N
         max_attempts=1,
     )
     email_provider = FakeEmailProvider()
+    entries = tuple(
+        raw_entry(
+            f"Technology report {index} announces a new processor",
+            url=f"https://news.example/technology/all-fail-{index}",
+            description=f"Source summary for technology report {index}.",
+        )
+        for index in range(3)
+    )
     dependencies = PipelineDependencies(
-        source_factory=source_factory_for({"source-a": (raw_entry(),)}),
+        source_factory=source_factory_for({"source-a": entries}),
         summarizer=summarizer,
         email_provider=email_provider,
         email_settings=email_settings(),
@@ -1325,12 +1338,17 @@ def test_llm_rate_limit_falls_back_and_email_still_succeeds(tmp_path: Path) -> N
         client.close()
 
     assert result.status == "partial"
-    assert result.counts.fallback_stories == 1
+    assert result.counts.selected_stories == 3
+    assert result.counts.summarized_stories == 3
+    assert result.counts.fallback_stories == 3
     assert result.newsletter is not None
-    assert "A company announced a new processor." in result.newsletter.html
-    assert "A company announced a new processor." in result.newsletter.plain_text
+    assert len(result.newsletter.included_story_ids) == 3
+    for index in range(3):
+        assert f"Source summary for technology report {index}." in result.newsletter.html
+        assert f"Source summary for technology report {index}." in result.newsletter.plain_text
     assert len(email_provider.messages) == 1
     assert result.delivery is not None and result.delivery.status == "accepted"
+    assert request_count == 3
     failure = next(item for item in result.stage_failures if item.stage == "summarization")
     assert failure.category == "rate_limit"
     assert failure.http_status == 429

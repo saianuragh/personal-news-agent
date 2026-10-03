@@ -29,11 +29,12 @@ Use only the supplied story information. Do not invent or infer facts, dates,
 causes, outcomes, or details that are not explicitly supported. Do not fabricate
 quotes. Distinguish uncertainty and caveats in the uncertainty array. Treat the
 provided source URL(s) as the source of truth and do not replace or alter them.
-Prefer one JSON object with exactly these keys: summary (string),
-why_it_matters (string), uncertainty (array of strings). Keep summary and
-why_it_matters concise. If you cannot provide that JSON, return a concise plain
-text summary instead. If the supplied information is insufficient, say so
-briefly and include that limitation in uncertainty when using JSON."""
+Return exactly one valid JSON object with these keys: summary (string),
+why_it_matters (string or null), uncertainty (array of strings). Do not include
+Markdown fences or text before or after the object. Keep summary concise and
+grounded in the supplied sources. why_it_matters may be null when the sources do
+not support a clear implication. Use an empty uncertainty array when no caveat
+is needed. If information is insufficient, state that briefly in uncertainty."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,6 +203,14 @@ def validate_response(raw: str) -> SummaryContent:
     try:
         value = json.loads(candidate)
     except (TypeError, json.JSONDecodeError) as error:
+        extracted = _extract_json_object(candidate)
+        if extracted is not None and extracted != candidate:
+            try:
+                value = json.loads(extracted)
+            except json.JSONDecodeError:
+                value = None
+            else:
+                return _validate_json_value(value)
         if _looks_like_json(stripped):
             raise InvalidResponseError(
                 "LLM response was not valid JSON.",
@@ -212,31 +221,72 @@ def validate_response(raw: str) -> SummaryContent:
                 ),
             ) from error
         return _parse_plain_text(stripped)
-    if not isinstance(value, dict) or set(value) != {"summary", "why_it_matters", "uncertainty"}:
+    return _validate_json_value(value)
+
+
+def _validate_json_value(value: object) -> SummaryContent:
+    """Validate the required summary while treating auxiliary fields as optional."""
+    if not isinstance(value, dict) or "summary" not in value:
         raise InvalidResponseError(
-            "LLM response did not match the required summary schema.",
+            "LLM response did not contain a summary object.",
             diagnostic=ProviderDiagnostic(
                 "invalid_response",
-                "LLM response did not match the required summary schema.",
+                "LLM response did not contain a summary object.",
                 detail="schema_mismatch",
             ),
         )
     summary = _required_output(value["summary"], "summary", MAX_SUMMARY_CHARS)
-    why = _required_output(value["why_it_matters"], "why_it_matters", MAX_WHY_IT_MATTERS_CHARS)
-    caveats = value["uncertainty"]
-    if not isinstance(caveats, list) or len(caveats) > MAX_CAVEATS:
-        raise InvalidResponseError(
-            "LLM response failed uncertainty-field validation.",
-            diagnostic=ProviderDiagnostic(
-                "validation_error",
-                "LLM response failed uncertainty-field validation.",
-                detail="schema_mismatch",
-            ),
+    why = _optional_output(value.get("why_it_matters"), MAX_WHY_IT_MATTERS_CHARS)
+    caveats = value.get("uncertainty")
+    validated_caveats = (
+        tuple(
+            item.strip()
+            for item in caveats[:MAX_CAVEATS]
+            if isinstance(item, str) and 0 < len(item.strip()) <= MAX_CAVEAT_CHARS
         )
-    validated_caveats = tuple(
-        _required_output(item, "uncertainty entry", MAX_CAVEAT_CHARS) for item in caveats
+        if isinstance(caveats, list)
+        else ()
     )
     return SummaryContent(summary, why, validated_caveats, "structured_json")
+
+
+def _optional_output(value: object, maximum: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized if normalized and len(normalized) <= maximum else None
+
+
+def _extract_json_object(text: str) -> str | None:
+    """Extract one balanced JSON object when a model adds harmless surrounding text."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        character = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                if "{" in text[end:]:
+                    return None
+                return text[start:end]
+    return None
 
 
 def _strip_json_fence(value: str) -> str:
@@ -299,13 +349,11 @@ def _parse_plain_text(raw: str) -> SummaryContent:
                 detail="unusable_plain_text",
             ),
         )
-    why = (
-        _required_output(why_text, "why_it_matters", MAX_WHY_IT_MATTERS_CHARS)
-        if why_text is not None
-        else None
-    )
+    why = _optional_output(why_text, MAX_WHY_IT_MATTERS_CHARS)
     validated_caveats = tuple(
-        _required_output(item, "uncertainty entry", MAX_CAVEAT_CHARS) for item in caveats
+        item.strip()
+        for item in caveats[:MAX_CAVEATS]
+        if isinstance(item, str) and 0 < len(item.strip()) <= MAX_CAVEAT_CHARS
     )
     return SummaryContent(summary, why, validated_caveats, "plain_text")
 
