@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
@@ -48,9 +48,16 @@ class ProviderDiagnostic:
 class LLMError(Exception):
     """Base class for safe-to-report summarization failures."""
 
-    def __init__(self, message: str, *, diagnostic: ProviderDiagnostic | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostic: ProviderDiagnostic | None = None,
+        attempt_count: int = 0,
+    ) -> None:
         super().__init__(message)
         self.diagnostic = diagnostic
+        self.attempt_count = attempt_count
 
 
 class TransientProviderError(LLMError):
@@ -90,10 +97,17 @@ class AIEnrichedStory:
     status: Literal["generated", "fallback", "failed"]
     failure_reason: str | None = None
     diagnostic: ProviderDiagnostic | None = None
+    attempt_count: int = 0
 
     def __post_init__(self) -> None:
         if self.generated_at.tzinfo is None or self.generated_at.utcoffset() is None:
             raise ValueError("generated_at must be timezone-aware")
+        if (
+            isinstance(self.attempt_count, bool)
+            or not isinstance(self.attempt_count, int)
+            or self.attempt_count < 0
+        ):
+            raise ValueError("attempt_count must be a non-negative integer")
         object.__setattr__(self, "generated_at", self.generated_at.astimezone(UTC))
 
 
@@ -101,7 +115,7 @@ class AIEnrichedStory:
 class LLMSettings:
     """Runtime configuration; credentials and model are always supplied externally."""
 
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     base_url: str
     timeout_seconds: float = 20.0
@@ -172,18 +186,36 @@ def build_prompt(ranked_story: RankedStory) -> str:
 def validate_response(raw: str) -> SummaryContent:
     """Parse strict JSON schema and enforce field/count/length bounds."""
     if not isinstance(raw, str) or len(raw) > MAX_RAW_RESPONSE_CHARS:
-        raise InvalidResponseError("LLM response exceeds the output-size limit")
+        raise InvalidResponseError(
+            "LLM response exceeds the output-size limit.",
+            diagnostic=ProviderDiagnostic(
+                "invalid_response", "LLM response exceeds the output-size limit."
+            ),
+        )
     try:
         value = json.loads(raw)
     except (TypeError, json.JSONDecodeError) as error:
-        raise InvalidResponseError("LLM response was not valid JSON") from error
+        raise InvalidResponseError(
+            "LLM response was not valid JSON.",
+            diagnostic=ProviderDiagnostic("invalid_response", "LLM response was not valid JSON."),
+        ) from error
     if not isinstance(value, dict) or set(value) != {"summary", "why_it_matters", "uncertainty"}:
-        raise InvalidResponseError("LLM response did not match the required summary schema")
+        raise InvalidResponseError(
+            "LLM response did not match the required summary schema.",
+            diagnostic=ProviderDiagnostic(
+                "invalid_response", "LLM response did not match the required summary schema."
+            ),
+        )
     summary = _required_output(value["summary"], "summary", MAX_SUMMARY_CHARS)
     why = _required_output(value["why_it_matters"], "why_it_matters", MAX_WHY_IT_MATTERS_CHARS)
     caveats = value["uncertainty"]
     if not isinstance(caveats, list) or len(caveats) > MAX_CAVEATS:
-        raise InvalidResponseError(f"uncertainty must be a list of at most {MAX_CAVEATS} strings")
+        raise InvalidResponseError(
+            "LLM response failed uncertainty-field validation.",
+            diagnostic=ProviderDiagnostic(
+                "validation_error", "LLM response failed uncertainty-field validation."
+            ),
+        )
     validated_caveats = tuple(
         _required_output(item, "uncertainty entry", MAX_CAVEAT_CHARS) for item in caveats
     )
@@ -211,8 +243,25 @@ class Summarizer:
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise ValueError("generated_at must be timezone-aware")
         prompt = build_prompt(ranked_story)
+        attempt_count = 0
         try:
-            raw = self._complete_with_retry(prompt)
+            raw, attempt_count = self._complete_with_retry(prompt)
+            if not isinstance(raw, str):
+                raise InvalidResponseError(
+                    "LLM provider response content was not text.",
+                    diagnostic=ProviderDiagnostic(
+                        "invalid_response", "LLM provider response content was not text."
+                    ),
+                    attempt_count=attempt_count,
+                )
+            if not raw.strip():
+                raise InvalidResponseError(
+                    "LLM provider returned an empty response.",
+                    diagnostic=ProviderDiagnostic(
+                        "empty_response", "LLM provider returned an empty response."
+                    ),
+                    attempt_count=attempt_count,
+                )
             content = validate_response(raw)
             return AIEnrichedStory(
                 ranked_story,
@@ -225,15 +274,27 @@ class Summarizer:
                 SCHEMA_VERSION,
                 timestamp,
                 "generated",
+                attempt_count=attempt_count,
             )
         except LLMError as error:
-            return _fallback_result(ranked_story, self.provider, timestamp, error)
+            attempt_count = error.attempt_count or attempt_count
+            return _fallback_result(
+                ranked_story,
+                self.provider,
+                timestamp,
+                error,
+                attempt_count=attempt_count,
+            )
 
-    def _complete_with_retry(self, prompt: str) -> str:
+    def _complete_with_retry(self, prompt: str) -> tuple[str, int]:
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return self.provider.complete(prompt, max_output_tokens=MAX_OUTPUT_TOKENS)
-            except TransientProviderError:
+                response = self.provider.complete(prompt, max_output_tokens=MAX_OUTPUT_TOKENS)
+                return response, attempt
+            except LLMError as error:
+                error.attempt_count = attempt
+                if not isinstance(error, TransientProviderError):
+                    raise
                 if attempt == self.max_attempts:
                     raise
         raise AssertionError("unreachable retry state")
@@ -277,7 +338,17 @@ def _fallback_result(
     provider: SummaryProvider,
     generated_at: datetime,
     error: LLMError,
+    *,
+    attempt_count: int,
 ) -> AIEnrichedStory:
+    diagnostic = error.diagnostic or ProviderDiagnostic(
+        "invalid_response"
+        if isinstance(error, InvalidResponseError)
+        else "provider_error"
+        if isinstance(error, (TransientProviderError, PermanentProviderError))
+        else "unknown",
+        "LLM enrichment failed.",
+    )
     descriptions = [
         article.description for article in ranked_story.story.members if article.description
     ]
@@ -295,7 +366,8 @@ def _fallback_result(
             generated_at,
             "fallback",
             type(error).__name__,
-            error.diagnostic,
+            diagnostic,
+            attempt_count,
         )
     return AIEnrichedStory(
         ranked_story,
@@ -309,16 +381,27 @@ def _fallback_result(
         generated_at,
         "failed",
         type(error).__name__,
-        error.diagnostic,
+        diagnostic,
+        attempt_count,
     )
 
 
 def _required_output(value: object, name: str, maximum: int) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise InvalidResponseError(f"{name} must be a non-empty string")
+        raise InvalidResponseError(
+            "LLM response failed required-field validation.",
+            diagnostic=ProviderDiagnostic(
+                "validation_error", "LLM response failed required-field validation."
+            ),
+        )
     normalized = value.strip()
     if len(normalized) > maximum:
-        raise InvalidResponseError(f"{name} exceeds the {maximum}-character limit")
+        raise InvalidResponseError(
+            "LLM response failed field-length validation.",
+            diagnostic=ProviderDiagnostic(
+                "validation_error", "LLM response failed field-length validation."
+            ),
+        )
     return normalized
 
 

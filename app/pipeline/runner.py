@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -28,6 +30,7 @@ from app.email.credentials import smtp_credential_configured
 from app.llm.base import (
     AIEnrichedStory,
     LLMSettings,
+    ProviderDiagnostic,
     Summarizer,
     source_description_fallback,
 )
@@ -122,6 +125,7 @@ class StageFailure:
     http_status: int | None = None
     provider_error_type: str | None = None
     provider_error_code: str | None = None
+    attempt_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,6 +439,7 @@ class PipelineRunner:
                         "llm_configuration",
                         "ValueError",
                         "Free LLM is not configured; source-description fallback used.",
+                        category="missing_configuration",
                     )
                 )
                 enriched.extend(
@@ -453,21 +458,33 @@ class PipelineRunner:
                                     StageFailure(
                                         "summarization",
                                         summary.failure_reason,
-                                        diagnostic.message
-                                        if diagnostic
-                                        else "LLM enrichment failed; fallback or omission used.",
-                                        category=diagnostic.category if diagnostic else None,
-                                        http_status=diagnostic.http_status if diagnostic else None,
+                                        _safe_llm_diagnostic_message(diagnostic),
+                                        category=_safe_llm_category(
+                                            diagnostic.category if diagnostic else None
+                                        ),
+                                        http_status=_safe_http_status(diagnostic),
                                         provider_error_type=(
-                                            diagnostic.provider_error_type if diagnostic else None
+                                            _safe_llm_identifier(diagnostic.provider_error_type)
+                                            if diagnostic
+                                            else None
                                         ),
                                         provider_error_code=(
-                                            diagnostic.provider_error_code if diagnostic else None
+                                            _safe_llm_identifier(diagnostic.provider_error_code)
+                                            if diagnostic
+                                            else None
                                         ),
+                                        attempt_count=summary.attempt_count,
                                     )
                                 )
                         except Exception as error:
-                            stage_failures.append(_safe_failure("summarization", error))
+                            stage_failures.append(
+                                StageFailure(
+                                    "summarization",
+                                    type(error).__name__,
+                                    "LLM enrichment failed; source-summary fallback used.",
+                                    category="unknown",
+                                )
+                            )
                             enriched.append(
                                 source_description_fallback(item, generated_at=run_time)
                             )
@@ -496,6 +513,19 @@ class PipelineRunner:
             ),
             omitted_stories=sum(item.summary is None for item in enriched),
         )
+
+        if mode == "send" or ai_in_preview:
+            _log_llm_enrichment(
+                model=configuration.llm_settings.model if configuration.llm_settings else None,
+                api_key=(
+                    configuration.llm_settings.api_key
+                    if configuration.llm_settings
+                    else None
+                ),
+                selected_count=len(selected),
+                enriched=enriched,
+                stage_failures=stage_failures,
+            )
 
         try:
             newsletter = render_newsletter(
@@ -830,6 +860,10 @@ def _log_run_finished(result: PipelineRunResult, completed_at: datetime) -> None
                         "error_type": failure.error_type,
                         "category": failure.category,
                         "http_status": failure.http_status,
+                        "provider_error_type": failure.provider_error_type,
+                        "provider_error_code": failure.provider_error_code,
+                        "attempt_count": failure.attempt_count,
+                        "retry_count": max(0, failure.attempt_count - 1),
                     }
                     for failure in result.stage_failures
                 ],
@@ -837,6 +871,94 @@ def _log_run_finished(result: PipelineRunResult, completed_at: datetime) -> None
             sort_keys=True,
         ),
     )
+
+
+def _log_llm_enrichment(
+    *,
+    model: str | None,
+    api_key: str | None,
+    selected_count: int,
+    enriched: list[AIEnrichedStory],
+    stage_failures: list[StageFailure],
+) -> None:
+    """Emit aggregate LLM outcomes only; prompts and response bodies stay private."""
+    model_name = model or next(
+        (item.model for item in enriched if item.provider != "not_called"), None
+    )
+    if model_name and api_key and api_key in model_name:
+        model_name = None
+    failures: Counter[str] = Counter()
+    for failure in stage_failures:
+        if failure.stage == "llm_configuration":
+            failures[_safe_llm_category(failure.category)] += selected_count
+        elif failure.stage == "summarization":
+            failures[_safe_llm_category(failure.category)] += 1
+    _LOGGER.info(
+        "%s",
+        json.dumps(
+            {
+                "event": "llm.enrichment.completed",
+                "model": model_name,
+                "selected_stories": selected_count,
+                "attempted_stories": sum(item.attempt_count > 0 for item in enriched),
+                "request_attempts": sum(item.attempt_count for item in enriched),
+                "retry_count": sum(max(0, item.attempt_count - 1) for item in enriched),
+                "generated_stories": sum(item.status == "generated" for item in enriched),
+                "fallback_stories": sum(item.status == "fallback" for item in enriched),
+                "failed_stories": sum(item.status == "failed" for item in enriched),
+                "failure_categories": dict(sorted(failures.items())),
+            },
+            sort_keys=True,
+        ),
+    )
+
+
+_LLM_CATEGORIES = {
+    "http_error",
+    "rate_limit",
+    "timeout",
+    "invalid_response",
+    "empty_response",
+    "validation_error",
+    "provider_error",
+    "missing_configuration",
+    "unknown",
+}
+
+
+def _safe_llm_category(category: str | None) -> str:
+    if category in {"rate_limiting"}:
+        return "rate_limit"
+    return category if category in _LLM_CATEGORIES else "unknown"
+
+
+def _safe_llm_identifier(value: str | None) -> str | None:
+    if value is None or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value):
+        return None
+    return value
+
+
+def _safe_http_status(diagnostic: ProviderDiagnostic | None) -> int | None:
+    if diagnostic is None:
+        return None
+    status = diagnostic.http_status
+    return status if isinstance(status, int) and 100 <= status <= 599 else None
+
+
+def _safe_llm_diagnostic_message(diagnostic: ProviderDiagnostic | None) -> str:
+    category = _safe_llm_category(diagnostic.category if diagnostic else None)
+    messages = {
+        "http_error": "LLM provider returned an HTTP error.",
+        "rate_limit": "LLM provider rate limit was reached.",
+        "timeout": "LLM provider request timed out.",
+        "invalid_response": "LLM provider response was invalid.",
+        "empty_response": "LLM provider returned empty content.",
+        "validation_error": "LLM response failed schema validation.",
+        "provider_error": "LLM provider request failed.",
+        "missing_configuration": "LLM configuration is missing.",
+        "unknown": "LLM enrichment failed; source-summary fallback used.",
+    }
+    return messages[category]
 
 
 def _safe_failure(stage: str, error: Exception, source_id: str | None = None) -> StageFailure:

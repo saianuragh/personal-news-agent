@@ -82,7 +82,7 @@ class DiagnosticSummarizer:
             "fallback",
             "TransientProviderError",
             ProviderDiagnostic(
-                "rate_limiting",
+                "rate_limit",
                 "Rate limit exceeded.",
                 http_status=429,
                 provider_error_type="rate_limit_error",
@@ -1246,6 +1246,22 @@ def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
     assert secret not in result.newsletter.html
     assert secret not in result.newsletter.plain_text
     assert result.stage_failures
+    events = [json.loads(record.message) for record in caplog.records]
+    enrichment = next(event for event in events if event["event"] == "llm.enrichment.completed")
+    assert enrichment["model"] == "mocked-openrouter-model"
+    assert enrichment["selected_stories"] == 5
+    assert enrichment["attempted_stories"] == 5
+    assert enrichment["request_attempts"] == 7
+    assert enrichment["retry_count"] == 2
+    assert enrichment["generated_stories"] == 3
+    assert enrichment["fallback_stories"] == 1
+    assert enrichment["failed_stories"] == 1
+    assert enrichment["failure_categories"] == {"invalid_response": 1, "timeout": 1}
+    captured_logs = " ".join(record.getMessage() for record in caplog.records)
+    assert secret not in captured_logs
+    assert story_two not in captured_logs
+    assert "not valid structured JSON" not in captured_logs
+    assert valid_response["summary"] not in captured_logs
 
 
 def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(tmp_path: Path) -> None:
@@ -1261,11 +1277,66 @@ def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(tmp_path:
     assert len(result.stage_failures) == 1
     failure = result.stage_failures[0]
     assert failure.error_type == "TransientProviderError"
-    assert failure.category == "rate_limiting"
+    assert failure.category == "rate_limit"
     assert failure.http_status == 429
     assert failure.provider_error_type == "rate_limit_error"
     assert failure.provider_error_code == "rate_limit_exceeded"
-    assert failure.message == "Rate limit exceeded."
+    assert failure.message == "LLM provider rate limit was reached."
+
+
+def test_llm_rate_limit_falls_back_and_email_still_succeeds(tmp_path: Path) -> None:
+    config_dir = setup_config(tmp_path)
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "type": "rate_limit_error",
+                        "code": "rate_limit_exceeded",
+                        "message": "Private provider response text is not logged.",
+                    }
+                },
+            )
+        )
+    )
+    summarizer = Summarizer(
+        OpenAICompatibleProvider(
+            LLMSettings("test-api-key", "test-model", "https://llm.example.test/v1"),
+            client=client,
+        ),
+        max_attempts=1,
+    )
+    email_provider = FakeEmailProvider()
+    dependencies = PipelineDependencies(
+        source_factory=source_factory_for({"source-a": (raw_entry(),)}),
+        summarizer=summarizer,
+        email_provider=email_provider,
+        email_settings=email_settings(),
+    )
+    try:
+        result = PipelineRunner(dependencies).run(
+            "send",
+            as_of=AS_OF,
+            config_directory=config_dir,
+            environ={},
+        )
+    finally:
+        client.close()
+
+    assert result.status == "partial"
+    assert result.counts.fallback_stories == 1
+    assert result.newsletter is not None
+    assert "Source description (fallback)" in result.newsletter.html
+    assert "Source description (fallback)" in result.newsletter.plain_text
+    assert len(email_provider.messages) == 1
+    assert result.delivery is not None and result.delivery.status == "accepted"
+    failure = next(item for item in result.stage_failures if item.stage == "summarization")
+    assert failure.category == "rate_limit"
+    assert failure.http_status == 429
+    assert failure.attempt_count == 1
+    assert max(0, failure.attempt_count - 1) == 0
+    assert "Private provider response text" not in failure.message
 
 
 def test_send_mode_calls_email_provider_and_reports_delivery_failure(
@@ -1334,6 +1405,12 @@ def test_missing_smtp_credential_disables_email_and_generates_newsletter(
     assert result.newsletter is not None
     assert result.delivery.preview_html_path.is_file()
     assert result.delivery.preview_text_path.is_file()
+    assert result.counts.fallback_stories == 1
+    assert any(
+        failure.stage == "llm_configuration"
+        and failure.category == "missing_configuration"
+        for failure in result.stage_failures
+    )
     assert len(observed) == 1
     stored = dependencies.run_repository.get_run(result.run_id)
     assert stored is not None

@@ -244,6 +244,8 @@ def _result_summary(result) -> dict[str, object]:
                 "http_status": failure.http_status,
                 "provider_error_type": failure.provider_error_type,
                 "provider_error_code": failure.provider_error_code,
+                "attempt_count": failure.attempt_count,
+                "retry_count": max(0, failure.attempt_count - 1),
             }
             for failure in result.stage_failures
         ],

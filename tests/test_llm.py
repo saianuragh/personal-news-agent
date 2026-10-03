@@ -72,6 +72,7 @@ def test_valid_structured_response_converts_to_enriched_story() -> None:
     result = Summarizer(provider).summarize(selected, generated_at=NOW)
 
     assert result.status == "generated"
+    assert result.attempt_count == 1
     assert result.ranked_story is selected
     assert result.summary == VALID["summary"]
     assert result.why_it_matters == VALID["why_it_matters"]
@@ -97,6 +98,8 @@ def test_malformed_missing_or_overlong_response_uses_labeled_fallback(raw: str) 
     result = Summarizer(FakeProvider([raw])).summarize(ranked_story(), generated_at=NOW)
 
     assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category in {"invalid_response", "validation_error"}
     assert result.summary == "The agency announced a satellite mission."
     assert result.why_it_matters is None
     assert result.failure_reason == "InvalidResponseError"
@@ -127,6 +130,9 @@ def test_transient_provider_error_retry_is_bounded() -> None:
     assert result.status == "fallback"
     assert result.failure_reason == "TransientProviderError"
     assert len(provider.calls) == 2
+    assert result.attempt_count == 2
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "provider_error"
 
 
 def test_permanent_provider_failure_is_not_retried_and_falls_back() -> None:
@@ -216,8 +222,9 @@ def test_provider_timeout_is_transient_and_summarizer_falls_back() -> None:
     assert result.status == "fallback"
     assert result.failure_reason == "TransientProviderError"
     assert result.diagnostic is not None
-    assert result.diagnostic.category == "network"
+    assert result.diagnostic.category == "timeout"
     assert result.diagnostic.provider_error_type == "ReadTimeout"
+    assert result.attempt_count == 2
     client.close()
 
 
@@ -242,19 +249,20 @@ def test_openai_compatible_provider_retries_a_real_timeout_once() -> None:
 
     assert attempts == 2
     assert result.status == "generated"
+    assert result.attempt_count == 2
     client.close()
 
 
 @pytest.mark.parametrize(
     ("status", "category", "transient"),
     [
-        (400, "invalid_request", False),
-        (401, "authentication", False),
-        (403, "authorization", False),
-        (404, "model_configuration", False),
-        (408, "network", True),
-        (429, "rate_limiting", True),
-        (503, "provider", True),
+        (400, "http_error", False),
+        (401, "http_error", False),
+        (403, "http_error", False),
+        (404, "http_error", False),
+        (408, "timeout", True),
+        (429, "rate_limit", True),
+        (503, "provider_error", True),
     ],
 )
 def test_http_failures_include_safe_classified_diagnostics(
@@ -285,7 +293,7 @@ def test_http_failures_include_safe_classified_diagnostics(
         "model_not_found" if status == 404 else "invalid_request"
     )
     assert raised.value.diagnostic.category == category
-    assert raised.value.diagnostic.message == "Provider rejected request details."
+    assert raised.value.diagnostic.message == f"OpenAI-compatible provider returned HTTP {status}."
     client.close()
 
 
@@ -314,10 +322,89 @@ def test_http_error_diagnostic_redacts_credentials_and_limits_message() -> None:
         provider.complete("{}", max_output_tokens=MAX_OUTPUT_TOKENS)
     diagnostic = raised.value.diagnostic
     assert diagnostic is not None
-    assert diagnostic.category == "authentication"
+    assert diagnostic.category == "http_error"
     assert secret not in diagnostic.message
-    assert "Authorization=[REDACTED]" in diagnostic.message
-    assert "api_key=[REDACTED]" in diagnostic.message
-    assert "https://user" not in diagnostic.message
+    assert secret not in repr(diagnostic)
+    assert diagnostic.message == "OpenAI-compatible provider returned HTTP 401."
+    assert "Provider rejected request details" not in diagnostic.message
     assert len(diagnostic.message) <= 500
     client.close()
+
+
+def test_empty_provider_content_is_classified_and_falls_back() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": ""}}]}
+            )
+        )
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+
+    result = Summarizer(provider).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "empty_response"
+    assert result.attempt_count == 1
+    client.close()
+
+
+def test_unexpected_provider_response_shape_is_classified_without_body() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"result": ""}))
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+
+    result = Summarizer(provider).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "invalid_response"
+    assert result.diagnostic.message == "LLM provider response shape was invalid."
+    client.close()
+
+
+def test_empty_raw_model_response_is_distinguished_from_invalid_json() -> None:
+    result = Summarizer(FakeProvider([""])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "empty_response"
+
+
+def test_non_text_model_response_is_classified_and_falls_back() -> None:
+    result = Summarizer(FakeProvider([None])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "invalid_response"
+    assert result.attempt_count == 1
+
+
+def test_schema_validation_failure_has_validation_category() -> None:
+    malformed = json.dumps({**VALID, "summary": ""})
+    result = Summarizer(FakeProvider([malformed])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "validation_error"
+    assert result.attempt_count == 1
+
+
+def test_malformed_json_has_invalid_response_category() -> None:
+    result = Summarizer(FakeProvider(["not JSON"])).summarize(ranked_story(), generated_at=NOW)
+
+    assert result.status == "fallback"
+    assert result.diagnostic is not None
+    assert result.diagnostic.category == "invalid_response"
+
+
+def test_api_key_is_excluded_from_settings_repr() -> None:
+    settings = LLMSettings("test-key-must-not-appear", "model", "https://llm.example/v1")
+
+    assert "test-key-must-not-appear" not in repr(settings)
