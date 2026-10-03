@@ -246,6 +246,11 @@ def _result_summary(result) -> dict[str, object]:
                 "provider_error_code": failure.provider_error_code,
                 "attempt_count": failure.attempt_count,
                 "retry_count": max(0, failure.attempt_count - 1),
+                "provider_identifier": failure.provider_identifier,
+                "request_id": failure.request_id,
+                "rate_limit_limit": failure.rate_limit_limit,
+                "rate_limit_remaining": failure.rate_limit_remaining,
+                "rate_limit_reset_seconds": failure.rate_limit_reset_seconds,
             }
             for failure in result.stage_failures
         ],

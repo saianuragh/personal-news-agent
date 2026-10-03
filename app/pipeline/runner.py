@@ -127,6 +127,11 @@ class StageFailure:
     provider_error_code: str | None = None
     attempt_count: int = 0
     diagnostic_detail: str | None = None
+    provider_identifier: str | None = None
+    request_id: str | None = None
+    rate_limit_limit: int | None = None
+    rate_limit_remaining: int | None = None
+    rate_limit_reset_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +482,41 @@ class PipelineRunner:
                                         attempt_count=summary.attempt_count,
                                         diagnostic_detail=_safe_llm_detail(
                                             diagnostic.detail if diagnostic else None
+                                        ),
+                                        provider_identifier=(
+                                            _safe_provider_identifier(
+                                                diagnostic.provider_identifier,
+                                                configuration.llm_settings.api_key
+                                                if configuration.llm_settings
+                                                else None,
+                                            )
+                                            if diagnostic
+                                            else None
+                                        ),
+                                        request_id=(
+                                            _safe_request_id(
+                                                diagnostic.request_id,
+                                                configuration.llm_settings.api_key
+                                                if configuration.llm_settings
+                                                else None,
+                                            )
+                                            if diagnostic
+                                            else None
+                                        ),
+                                        rate_limit_limit=(
+                                            _safe_quota_integer(diagnostic.rate_limit_limit)
+                                            if diagnostic
+                                            else None
+                                        ),
+                                        rate_limit_remaining=(
+                                            _safe_quota_integer(diagnostic.rate_limit_remaining)
+                                            if diagnostic
+                                            else None
+                                        ),
+                                        rate_limit_reset_seconds=(
+                                            _safe_quota_reset(diagnostic.rate_limit_reset_seconds)
+                                            if diagnostic
+                                            else None
                                         ),
                                     )
                                 )
@@ -870,6 +910,11 @@ def _log_run_finished(result: PipelineRunResult, completed_at: datetime) -> None
                         "attempt_count": failure.attempt_count,
                         "retry_count": max(0, failure.attempt_count - 1),
                         "diagnostic_detail": failure.diagnostic_detail,
+                        "provider_identifier": failure.provider_identifier,
+                        "request_id": failure.request_id,
+                        "rate_limit_limit": failure.rate_limit_limit,
+                        "rate_limit_remaining": failure.rate_limit_remaining,
+                        "rate_limit_reset_seconds": failure.rate_limit_reset_seconds,
                     }
                     for failure in result.stage_failures
                 ],
@@ -976,6 +1021,38 @@ def _safe_llm_identifier(value: str | None) -> str | None:
     if value is None or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", value):
         return None
     return value
+
+
+def _safe_provider_identifier(value: str | None, api_key: str | None) -> str | None:
+    if value is None or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value):
+        return None
+    if api_key and api_key in value:
+        return None
+    return value
+
+
+def _safe_request_id(value: str | None, api_key: str | None) -> str | None:
+    if value is None:
+        return None
+    pattern = (
+        r"(?:req|gen|chatcmpl)[-_][A-Za-z0-9_-]{8,100}"
+        r"|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+    )
+    if not re.fullmatch(pattern, value) or (api_key and api_key in value):
+        return None
+    return value
+
+
+def _safe_quota_integer(value: int | None) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 999_999_999:
+        return value
+    return None
+
+
+def _safe_quota_reset(value: float | None) -> float | None:
+    if isinstance(value, int | float) and 0 <= value <= 31_536_000:
+        return float(value)
+    return None
 
 
 def _safe_http_status(diagnostic: ProviderDiagnostic | None) -> int | None:

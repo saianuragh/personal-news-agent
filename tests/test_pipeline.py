@@ -10,6 +10,7 @@ from pathlib import Path
 
 import app.pipeline.runner as runner_module
 import httpx
+import pytest
 import yaml
 from app.config import SourceConfig
 from app.database.base import PipelineRunRepository
@@ -87,6 +88,11 @@ class DiagnosticSummarizer:
                 http_status=429,
                 provider_error_type="rate_limit_error",
                 provider_error_code="rate_limit_exceeded",
+                provider_identifier="OpenRouter",
+                request_id="req-20261003-abcdefgh1234",
+                rate_limit_limit=20,
+                rate_limit_remaining=0,
+                rate_limit_reset_seconds=60,
             ),
         )
 
@@ -1264,7 +1270,10 @@ def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
     assert valid_response["summary"] not in captured_logs
 
 
-def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(tmp_path: Path) -> None:
+def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
     result = run_preview(
         tmp_path,
         ("source-a",),
@@ -1282,6 +1291,19 @@ def test_sanitized_provider_diagnostic_is_preserved_in_pipeline_result(tmp_path:
     assert failure.provider_error_type == "rate_limit_error"
     assert failure.provider_error_code == "rate_limit_exceeded"
     assert failure.message == "LLM provider rate limit was reached."
+    assert failure.provider_identifier == "OpenRouter"
+    assert failure.request_id == "req-20261003-abcdefgh1234"
+    assert failure.rate_limit_limit == 20
+    assert failure.rate_limit_remaining == 0
+    assert failure.rate_limit_reset_seconds == 60
+    finish = next(
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if '"event": "pipeline.run.finished"' in record.getMessage()
+    )
+    logged_failure = finish["stage_failures"][0]
+    assert logged_failure["request_id"] == "req-20261003-abcdefgh1234"
+    assert logged_failure["rate_limit_limit"] == 20
 
 
 def test_all_llm_calls_fail_but_newspaper_email_still_succeeds(tmp_path: Path) -> None:

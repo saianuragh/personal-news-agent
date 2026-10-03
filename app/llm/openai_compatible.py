@@ -164,9 +164,11 @@ class OpenAICompatibleProvider:
 
 
 def _http_error_diagnostic(response: httpx.Response, api_key: str) -> ProviderDiagnostic:
-    """Extract status and identifier-shaped metadata, never provider response prose."""
+    """Extract allowlisted error metadata; never retain provider response prose."""
     provider_type: str | None = None
     provider_code: str | None = None
+    provider_identifier: str | None = None
+    request_id: str | None = None
     try:
         body: Any = response.json()
     except ValueError:
@@ -175,6 +177,21 @@ def _http_error_diagnostic(response: httpx.Response, api_key: str) -> ProviderDi
     if isinstance(error, dict):
         provider_type = _safe_metadata(error.get("type"), api_key)
         provider_code = _safe_metadata(error.get("code"), api_key)
+        metadata = error.get("metadata")
+        if isinstance(metadata, dict):
+            provider_identifier = _safe_provider_identifier(
+                metadata.get("provider_name")
+                or metadata.get("provider")
+                or metadata.get("provider_id"),
+                api_key,
+            )
+            request_id = _safe_request_id(metadata.get("request_id"), api_key)
+    if response.status_code == 429:
+        request_id = request_id or _safe_request_id(
+            response.headers.get("x-openrouter-request-id")
+            or response.headers.get("x-request-id"),
+            api_key,
+        )
     category = _classify_http_error(response.status_code)
     message = f"OpenAI-compatible provider returned HTTP {response.status_code}."
     return ProviderDiagnostic(
@@ -188,7 +205,70 @@ def _http_error_diagnostic(response: httpx.Response, api_key: str) -> ProviderDi
             if response.status_code == 429
             else None
         ),
+        provider_identifier=provider_identifier,
+        request_id=request_id,
+        rate_limit_limit=(
+            _safe_integer_header(response, "RateLimit-Limit", "X-RateLimit-Limit")
+            if response.status_code == 429
+            else None
+        ),
+        rate_limit_remaining=(
+            _safe_integer_header(response, "RateLimit-Remaining", "X-RateLimit-Remaining")
+            if response.status_code == 429
+            else None
+        ),
+        rate_limit_reset_seconds=(
+            _safe_float_header(response, "RateLimit-Reset", "X-RateLimit-Reset")
+            if response.status_code == 429
+            else None
+        ),
     )
+
+
+def _safe_integer_header(response: httpx.Response, *names: str) -> int | None:
+    for name in names:
+        value = response.headers.get(name)
+        if value is not None and re.fullmatch(r"\d{1,9}", value.strip()):
+            return int(value)
+    return None
+
+
+def _safe_float_header(response: httpx.Response, *names: str) -> float | None:
+    for name in names:
+        value = response.headers.get(name)
+        if value is None:
+            continue
+        try:
+            parsed = float(value.strip())
+        except ValueError:
+            continue
+        if 0 <= parsed <= 31_536_000:
+            return parsed
+    return None
+
+
+def _safe_provider_identifier(value: object, api_key: str) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if api_key and api_key in normalized:
+        return None
+    return normalized if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", normalized) else None
+
+
+def _safe_request_id(value: object, api_key: str) -> str | None:
+    """Accept only opaque request/generation IDs, never arbitrary header text."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if api_key and api_key in normalized:
+        return None
+    known_id = re.fullmatch(
+        r"(?:req|gen|chatcmpl)[-_][A-Za-z0-9_-]{8,100}"
+        r"|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
+        normalized,
+    )
+    return normalized if known_id else None
 
 
 def _parse_retry_after(value: str | None) -> float | None:

@@ -696,6 +696,140 @@ def test_429_without_retry_after_uses_bounded_jittered_backoff() -> None:
     assert result.diagnostic.detail == "retry_backoff_exhausted"
 
 
+def test_429_diagnostic_captures_only_allowlisted_provider_metadata() -> None:
+    response = httpx.Response(
+        429,
+        headers={
+            "Retry-After": "4",
+            "RateLimit-Limit": "20",
+            "RateLimit-Remaining": "0",
+            "RateLimit-Reset": "60",
+            "X-Request-ID": "req-20261003-abcdefgh1234",
+            "Set-Cookie": "session=private-cookie",
+            "X-OpenRouter-Account-ID": "private-account-id",
+        },
+        json={
+            "error": {
+                "type": "rate_limit_error",
+                "code": "free_tier_limit",
+                "message": "Private response text and prompt must not be retained.",
+                "metadata": {"provider_name": "OpenRouter"},
+            }
+        },
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: response))
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+    with pytest.raises(TransientProviderError) as raised:
+        provider.complete("private prompt", max_output_tokens=MAX_OUTPUT_TOKENS)
+    diagnostic = raised.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.http_status == 429
+    assert diagnostic.category == "rate_limit"
+    assert diagnostic.provider_error_type == "rate_limit_error"
+    assert diagnostic.provider_error_code == "free_tier_limit"
+    assert diagnostic.provider_identifier == "OpenRouter"
+    assert diagnostic.request_id == "req-20261003-abcdefgh1234"
+    assert diagnostic.retry_after_seconds == 4
+    assert diagnostic.rate_limit_limit == 20
+    assert diagnostic.rate_limit_remaining == 0
+    assert diagnostic.rate_limit_reset_seconds == 60
+    assert "Private response text" not in repr(diagnostic)
+    assert "private prompt" not in repr(diagnostic)
+    assert "private-cookie" not in repr(diagnostic)
+    assert "private-account-id" not in repr(diagnostic)
+    client.close()
+
+
+def test_429_without_retry_after_keeps_it_absent() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                429,
+                json={"error": {"type": "rate_limit_error", "code": 429}},
+            )
+        )
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+    with pytest.raises(TransientProviderError) as raised:
+        provider.complete("{}", max_output_tokens=MAX_OUTPUT_TOKENS)
+    assert raised.value.diagnostic is not None
+    assert raised.value.diagnostic.retry_after_seconds is None
+    assert raised.value.diagnostic.provider_error_type == "rate_limit_error"
+    assert raised.value.diagnostic.provider_error_code == "429"
+    client.close()
+
+
+def test_unrecognized_request_ids_and_quota_headers_are_ignored() -> None:
+    response = httpx.Response(
+        429,
+        headers={
+            "X-Request-ID": "private-token-value",
+            "RateLimit-Limit": "20 requests/hour",
+            "RateLimit-Remaining": "unknown",
+            "RateLimit-Reset": "tomorrow",
+        },
+        json={"error": {"metadata": {"provider_name": "provider name with unsafe text"}}},
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: response))
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+    with pytest.raises(TransientProviderError) as raised:
+        provider.complete("{}", max_output_tokens=MAX_OUTPUT_TOKENS)
+    diagnostic = raised.value.diagnostic
+    assert diagnostic is not None
+    assert diagnostic.request_id is None
+    assert diagnostic.provider_identifier is None
+    assert diagnostic.rate_limit_limit is None
+    assert diagnostic.rate_limit_remaining is None
+    assert diagnostic.rate_limit_reset_seconds is None
+    client.close()
+
+
+def test_429_response_body_and_sensitive_headers_are_not_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO")
+    response = httpx.Response(
+        429,
+        headers={
+            "Authorization": "Bearer private-auth-value",
+            "Set-Cookie": "session=private-cookie-value",
+            "X-Request-ID": "private-auth-value",
+        },
+        json={
+            "error": {
+                "type": "rate_limit_error",
+                "code": "rate_limited",
+                "message": "private response prose with private prompt text",
+            }
+        },
+    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: response))
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1"), client=client
+    )
+    with pytest.raises(TransientProviderError) as raised:
+        provider.complete("private prompt text", max_output_tokens=MAX_OUTPUT_TOKENS)
+    diagnostic = raised.value.diagnostic
+    assert diagnostic is not None
+    safe_output = f"{raised.value!s} {diagnostic!r} {caplog.text}"
+    for forbidden in (
+        "private-auth-value",
+        "private-cookie-value",
+        "private response prose",
+        "private prompt text",
+        "Authorization",
+        "Set-Cookie",
+    ):
+        assert forbidden not in safe_output
+    client.close()
+
+
 def test_unreasonable_retry_after_uses_capped_backoff_instead() -> None:
     sleeps: list[float] = []
     provider = FakeProvider(

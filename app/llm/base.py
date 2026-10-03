@@ -52,6 +52,11 @@ class ProviderDiagnostic:
     provider_error_code: str | None = None
     detail: str | None = None
     retry_after_seconds: float | None = None
+    provider_identifier: str | None = None
+    request_id: str | None = None
+    rate_limit_limit: int | None = None
+    rate_limit_remaining: int | None = None
+    rate_limit_reset_seconds: float | None = None
 
 
 class LLMError(Exception):
@@ -544,6 +549,11 @@ def _diagnostic_with_detail(diagnostic: ProviderDiagnostic, detail: str) -> Prov
         provider_error_code=diagnostic.provider_error_code,
         detail=detail,
         retry_after_seconds=diagnostic.retry_after_seconds,
+        provider_identifier=diagnostic.provider_identifier,
+        request_id=diagnostic.request_id,
+        rate_limit_limit=diagnostic.rate_limit_limit,
+        rate_limit_remaining=diagnostic.rate_limit_remaining,
+        rate_limit_reset_seconds=diagnostic.rate_limit_reset_seconds,
     )
 
 
