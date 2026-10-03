@@ -11,12 +11,14 @@ from app.llm.base import (
     MAX_OUTPUT_TOKENS,
     LLMSettings,
     PermanentProviderError,
+    ProviderDiagnostic,
     Summarizer,
     TransientProviderError,
     build_prompt,
 )
 from app.llm.openai_compatible import OpenAICompatibleProvider
 from app.models.article import Article
+from app.newsletter.renderer import render_newsletter
 from app.processing.categorize import categorize_story
 from app.processing.deduplicate import deduplicate_articles
 from app.processing.rank import rank_stories
@@ -45,8 +47,10 @@ class FakeProvider:
         return outcome
 
 
-def ranked_story(*, description: str | None = "The agency announced a satellite mission."):
-    url = "https://news.example/story/1"
+def ranked_story(
+    *, description: str | None = "The agency announced a satellite mission.", story_number: int = 1
+):
+    url = f"https://news.example/story/{story_number}"
     article = Article(
         article_id=uuid4(),
         source_id="science-source",
@@ -561,3 +565,210 @@ def test_api_key_is_excluded_from_settings_repr() -> None:
     settings = LLMSettings("test-key-must-not-appear", "model", "https://llm.example/v1")
 
     assert "test-key-must-not-appear" not in repr(settings)
+
+
+def test_request_pacing_configuration_has_safe_default_and_bounds() -> None:
+    settings = LLMSettings.from_env(
+        {
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "openrouter/free",
+            "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        }
+    )
+    assert settings.request_interval_seconds == 3.2
+    assert settings.retry_max_wait_seconds == 8
+    configured = LLMSettings.from_env(
+        {
+            "LLM_API_KEY": "test-key",
+            "LLM_MODEL": "openrouter/free",
+            "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+            "LLM_REQUEST_INTERVAL_SECONDS": "4.5",
+            "LLM_RETRY_MAX_WAIT_SECONDS": "5",
+        }
+    )
+    assert configured.request_interval_seconds == 4.5
+    assert configured.retry_max_wait_seconds == 5
+    for name, value in (
+        ("LLM_REQUEST_INTERVAL_SECONDS", "3.0"),
+        ("LLM_REQUEST_INTERVAL_SECONDS", "61"),
+        ("LLM_RETRY_MAX_WAIT_SECONDS", "31"),
+    ):
+        with pytest.raises(ValueError, match=name):
+            LLMSettings.from_env(
+                {
+                    "LLM_API_KEY": "test-key",
+                    "LLM_MODEL": "openrouter/free",
+                    "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+                    name: value,
+                }
+            )
+
+
+def test_provider_paces_requests_at_configured_interval() -> None:
+    now = 0.0
+    sleeps: list[float] = []
+
+    def sleep_for(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": json.dumps(VALID)}}]}
+            )
+        )
+    )
+    settings = LLMSettings(
+        "test-key", "model", "https://llm.example/v1", request_interval_seconds=3.2
+    )
+    provider = OpenAICompatibleProvider(
+        settings, client=client, sleep=sleep_for, monotonic=lambda: now
+    )
+    provider.complete("{}", max_output_tokens=MAX_OUTPUT_TOKENS)
+    provider.complete("{}", max_output_tokens=MAX_OUTPUT_TOKENS)
+    assert sleeps == [pytest.approx(3.2)]
+    client.close()
+
+
+def test_429_retry_after_is_parsed_and_respected(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO")
+    attempts = 0
+    retry_waits: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "2"}, json={"error": {}})
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": json.dumps(VALID)}}]}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1", request_interval_seconds=3.2),
+        client=client,
+        sleep=lambda _: None,
+        monotonic=lambda: 0.0,
+    )
+    summarizer = Summarizer(
+        provider,
+        max_attempts=2,
+        sleep=retry_waits.append,
+        jitter=lambda low, high: high,
+    )
+    result = summarizer.summarize(ranked_story(), generated_at=NOW)
+    assert result.status == "generated"
+    assert attempts == 2
+    assert retry_waits == [2]
+    assert "strategy=retry_after_used" in caplog.text
+    client.close()
+
+
+def test_429_without_retry_after_uses_bounded_jittered_backoff() -> None:
+    sleeps: list[float] = []
+    provider = FakeProvider(
+        [
+            TransientProviderError(
+                "rate limited",
+                diagnostic=ProviderDiagnostic("rate_limit", "rate limited", http_status=429),
+            ),
+            TransientProviderError(
+                "rate limited",
+                diagnostic=ProviderDiagnostic("rate_limit", "rate limited", http_status=429),
+            ),
+        ]
+    )
+    result = Summarizer(
+        provider,
+        max_attempts=2,
+        retry_max_wait_seconds=1.2,
+        sleep=sleeps.append,
+        jitter=lambda low, high: high,
+    ).summarize(ranked_story(), generated_at=NOW)
+    assert result.status == "fallback"
+    assert len(provider.calls) == 2
+    assert len(sleeps) == 1
+    assert sleeps[0] == pytest.approx(1.2)
+    assert result.diagnostic is not None
+    assert result.diagnostic.detail == "retry_backoff_exhausted"
+
+
+def test_unreasonable_retry_after_uses_capped_backoff_instead() -> None:
+    sleeps: list[float] = []
+    provider = FakeProvider(
+        [
+            TransientProviderError(
+                "rate limited",
+                diagnostic=ProviderDiagnostic(
+                    "rate_limit", "rate limited", http_status=429, retry_after_seconds=900
+                ),
+            ),
+            json.dumps(VALID),
+        ]
+    )
+    result = Summarizer(
+        provider,
+        max_attempts=2,
+        retry_max_wait_seconds=1.2,
+        sleep=sleeps.append,
+        jitter=lambda low, high: high,
+    ).summarize(ranked_story(), generated_at=NOW)
+    assert result.status == "generated"
+    assert sleeps[0] == pytest.approx(1.2)
+    assert sleeps[0] <= 1.2
+
+
+def test_repeated_rate_limits_open_circuit_and_all_stories_render_fallbacks() -> None:
+    provider = FakeProvider(
+        [
+            TransientProviderError(
+                "rate limited",
+                diagnostic=ProviderDiagnostic("rate_limit", "rate limited", http_status=429),
+            ),
+            TransientProviderError(
+                "rate limited",
+                diagnostic=ProviderDiagnostic("rate_limit", "rate limited", http_status=429),
+            ),
+        ]
+    )
+    summarizer = Summarizer(
+        provider, max_attempts=3, sleep=lambda _: None, jitter=lambda low, high: 0
+    )
+    ranked = [ranked_story(story_number=index) for index in range(1, 4)]
+    enriched = [summarizer.summarize(item, generated_at=NOW) for item in ranked]
+    assert len(provider.calls) == 2
+    assert all(item.status == "fallback" for item in enriched)
+    assert enriched[0].attempt_count == 2
+    assert enriched[1].attempt_count == 0
+    assert enriched[1].diagnostic is not None
+    assert enriched[1].diagnostic.detail == "rate_limit_circuit_open"
+    document = render_newsletter(enriched, generated_at=NOW, timezone_name="UTC")
+    assert len(document.included_story_ids) == 3
+    for item in ranked:
+        original_url = item.story.retained_article.url
+        assert original_url in document.html
+        assert original_url in document.plain_text
+
+
+def test_valid_json_mode_response_still_enriches_after_retry_handling() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"choices": [{"message": {"content": json.dumps(VALID)}}]}
+            )
+        )
+    )
+    provider = OpenAICompatibleProvider(
+        LLMSettings("test-key", "model", "https://llm.example/v1", request_interval_seconds=3.2),
+        client=client,
+        sleep=lambda _: None,
+        monotonic=lambda: 0.0,
+    )
+    result = Summarizer(provider).summarize(ranked_story(), generated_at=NOW)
+    assert result.status == "generated"
+    assert result.response_format == "structured_json"
+    assert result.summary == VALID["summary"]
+    client.close()

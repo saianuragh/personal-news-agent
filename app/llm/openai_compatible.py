@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import time
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -19,10 +22,20 @@ from app.llm.base import (
 class OpenAICompatibleProvider:
     """HTTP adapter for providers exposing the standard chat-completions shape."""
 
-    def __init__(self, settings: LLMSettings, *, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        settings: LLMSettings,
+        *,
+        client: httpx.Client | None = None,
+        sleep=time.sleep,
+        monotonic=time.monotonic,
+    ) -> None:
         self.settings = settings
         self._client = client or httpx.Client(timeout=settings.timeout_seconds)
         self._owns_client = client is None
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._last_request_at: float | None = None
 
     @property
     def provider_name(self) -> str:
@@ -34,6 +47,7 @@ class OpenAICompatibleProvider:
 
     def complete(self, prompt: str, *, max_output_tokens: int) -> str:
         """Send bounded prompt and return only the provider's content string."""
+        self._pace_request()
         try:
             response = self._client.post(
                 f"{self.settings.base_url}/chat/completions",
@@ -133,6 +147,15 @@ class OpenAICompatibleProvider:
         if self._owns_client:
             self._client.close()
 
+    def _pace_request(self) -> None:
+        """Keep this provider instance below the configured request rate."""
+        now = self._monotonic()
+        if self._last_request_at is not None:
+            remaining = self.settings.request_interval_seconds - (now - self._last_request_at)
+            if remaining > 0:
+                self._sleep(remaining)
+        self._last_request_at = self._monotonic()
+
     def __enter__(self) -> OpenAICompatibleProvider:
         return self
 
@@ -160,7 +183,31 @@ def _http_error_diagnostic(response: httpx.Response, api_key: str) -> ProviderDi
         http_status=response.status_code,
         provider_error_type=provider_type,
         provider_error_code=provider_code,
+        retry_after_seconds=(
+            _parse_retry_after(response.headers.get("Retry-After"))
+            if response.status_code == 429
+            else None
+        ),
     )
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse delta-seconds or an HTTP date without retaining header text."""
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            seconds = (retry_at - datetime.now(UTC)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if seconds < 0:
+        return None
+    return seconds if seconds < float("inf") else None
 
 
 def _classify_http_error(

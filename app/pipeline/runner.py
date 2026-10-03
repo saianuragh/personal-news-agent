@@ -802,6 +802,7 @@ def _configured_summarizer(settings: LLMSettings | None) -> Summarizer:
     return Summarizer(
         OpenAICompatibleProvider(settings),
         max_attempts=settings.max_attempts,
+        retry_max_wait_seconds=settings.retry_max_wait_seconds,
     )
 
 
@@ -946,6 +947,11 @@ _LLM_DIAGNOSTIC_DETAILS = {
     "empty_content_finish_length",
     "empty_content_finish_content_filter",
     "empty_content_finish_tool_calls",
+    "retry_after_used",
+    "retry_backoff",
+    "retry_after_used_exhausted",
+    "retry_backoff_exhausted",
+    "rate_limit_circuit_open",
     "missing_choices",
     "missing_content",
     "malformed_json",

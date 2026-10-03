@@ -1348,7 +1348,7 @@ def test_all_llm_calls_fail_but_newspaper_email_still_succeeds(tmp_path: Path) -
         assert f"Source summary for technology report {index}." in result.newsletter.plain_text
     assert len(email_provider.messages) == 1
     assert result.delivery is not None and result.delivery.status == "accepted"
-    assert request_count == 3
+    assert request_count == 2
     failure = next(item for item in result.stage_failures if item.stage == "summarization")
     assert failure.category == "rate_limit"
     assert failure.http_status == 429

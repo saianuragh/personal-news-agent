@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
+import random
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -23,6 +26,7 @@ MAX_OUTPUT_TOKENS = 500
 MAX_INPUT_DESCRIPTION_CHARS = 1_000
 MAX_INPUT_ARTICLES = 5
 MAX_RAW_RESPONSE_CHARS = 2_000
+_LOGGER = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are an editor preparing a concise personal news briefing.
 Use only the supplied story information. Do not invent or infer facts, dates,
@@ -47,6 +51,7 @@ class ProviderDiagnostic:
     provider_error_type: str | None = None
     provider_error_code: str | None = None
     detail: str | None = None
+    retry_after_seconds: float | None = None
 
 
 class LLMError(Exception):
@@ -126,6 +131,8 @@ class LLMSettings:
     base_url: str
     timeout_seconds: float = 20.0
     max_attempts: int = 2
+    request_interval_seconds: float = 3.2
+    retry_max_wait_seconds: float = 8.0
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> LLMSettings:
@@ -150,7 +157,19 @@ class LLMSettings:
             raise ValueError("LLM_MAX_ATTEMPTS must be an integer from 1 to 3") from error
         if str(attempts) != attempts_value.strip() or not 1 <= attempts <= 3:
             raise ValueError("LLM_MAX_ATTEMPTS must be an integer from 1 to 3")
-        return cls(api_key, model, base_url, timeout, attempts)
+        request_interval = _bounded_number(
+            values.get("LLM_REQUEST_INTERVAL_SECONDS", "3.2"),
+            "LLM_REQUEST_INTERVAL_SECONDS",
+            3.1,
+            60.0,
+        )
+        retry_max_wait = _bounded_number(
+            values.get("LLM_RETRY_MAX_WAIT_SECONDS", "8"),
+            "LLM_RETRY_MAX_WAIT_SECONDS",
+            0.1,
+            30.0,
+        )
+        return cls(api_key, model, base_url, timeout, attempts, request_interval, retry_max_wait)
 
 
 class SummaryProvider(Protocol):
@@ -361,7 +380,16 @@ def _parse_plain_text(raw: str) -> SummaryContent:
 class Summarizer:
     """Bounded retry, schema validation, and architecture-approved fallback."""
 
-    def __init__(self, provider: SummaryProvider, *, max_attempts: int = 2) -> None:
+    def __init__(
+        self,
+        provider: SummaryProvider,
+        *,
+        max_attempts: int = 2,
+        retry_max_wait_seconds: float = 8.0,
+        rate_limit_failure_threshold: int = 2,
+        sleep=time.sleep,
+        jitter=random.uniform,
+    ) -> None:
         if (
             isinstance(max_attempts, bool)
             or not isinstance(max_attempts, int)
@@ -370,6 +398,16 @@ class Summarizer:
             raise ValueError("max_attempts must be an integer from 1 to 3")
         self.provider = provider
         self.max_attempts = max_attempts
+        if not 0.1 <= retry_max_wait_seconds <= 30:
+            raise ValueError("retry_max_wait_seconds must be between 0.1 and 30")
+        if rate_limit_failure_threshold < 1:
+            raise ValueError("rate_limit_failure_threshold must be positive")
+        self.retry_max_wait_seconds = retry_max_wait_seconds
+        self.rate_limit_failure_threshold = rate_limit_failure_threshold
+        self._sleep = sleep
+        self._jitter = jitter
+        self._consecutive_rate_limits = 0
+        self._rate_limit_circuit_open = False
 
     def summarize(
         self, ranked_story: RankedStory, *, generated_at: datetime | None = None
@@ -380,6 +418,19 @@ class Summarizer:
             raise ValueError("generated_at must be timezone-aware")
         prompt = build_prompt(ranked_story)
         attempt_count = 0
+        if self._rate_limit_circuit_open:
+            _LOGGER.info("llm.retry_suppressed: category=rate_limit reason=circuit_open")
+            error = TransientProviderError(
+                "LLM provider rate limit circuit is open.",
+                diagnostic=ProviderDiagnostic(
+                    "rate_limit",
+                    "LLM provider rate limit was reached.",
+                    detail="rate_limit_circuit_open",
+                ),
+            )
+            return _fallback_result(
+                ranked_story, self.provider, timestamp, error, attempt_count=0
+            )
         try:
             raw, attempt_count = self._complete_with_retry(prompt)
             if not isinstance(raw, str):
@@ -424,17 +475,76 @@ class Summarizer:
             )
 
     def _complete_with_retry(self, prompt: str) -> tuple[str, int]:
+        retry_after_was_used = False
         for attempt in range(1, self.max_attempts + 1):
             try:
                 response = self.provider.complete(prompt, max_output_tokens=MAX_OUTPUT_TOKENS)
+                self._consecutive_rate_limits = 0
                 return response, attempt
             except LLMError as error:
                 error.attempt_count = attempt
                 if not isinstance(error, TransientProviderError):
+                    self._consecutive_rate_limits = 0
                     raise
+                is_rate_limit = bool(
+                    error.diagnostic and error.diagnostic.category == "rate_limit"
+                )
+                if is_rate_limit:
+                    self._consecutive_rate_limits += 1
+                    if self._consecutive_rate_limits >= self.rate_limit_failure_threshold:
+                        self._rate_limit_circuit_open = True
+                else:
+                    self._consecutive_rate_limits = 0
                 if attempt == self.max_attempts:
+                    if is_rate_limit and error.diagnostic:
+                        _LOGGER.info("llm.retry_exhausted: category=rate_limit")
+                        detail = (
+                            "retry_after_used_exhausted"
+                            if retry_after_was_used
+                            else "retry_backoff_exhausted"
+                        )
+                        error.diagnostic = _diagnostic_with_detail(error.diagnostic, detail)
                     raise
+                if self._rate_limit_circuit_open:
+                    if error.diagnostic:
+                        error.diagnostic = _diagnostic_with_detail(
+                            error.diagnostic, "rate_limit_circuit_open"
+                        )
+                    raise
+                wait_seconds, retry_after_used = self._retry_delay(error, attempt)
+                retry_after_was_used = retry_after_was_used or retry_after_used
+                if wait_seconds > 0:
+                    self._sleep(wait_seconds)
+                strategy = "retry_after_used" if retry_after_used else "retry_backoff"
+                _LOGGER.info(
+                    "llm.retry_wait: category=%s strategy=%s",
+                    "rate_limit" if is_rate_limit else "transient_error",
+                    strategy,
+                )
+                if is_rate_limit and error.diagnostic:
+                    error.diagnostic = _diagnostic_with_detail(error.diagnostic, strategy)
         raise AssertionError("unreachable retry state")
+
+    def _retry_delay(self, error: LLMError, attempt: int) -> tuple[float, bool]:
+        diagnostic = error.diagnostic
+        retry_after = diagnostic.retry_after_seconds if diagnostic else None
+        if retry_after is not None and 0 <= retry_after <= self.retry_max_wait_seconds:
+            return retry_after, True
+        exponential = min(2 ** (attempt - 1), self.retry_max_wait_seconds)
+        jitter = self._jitter(0.0, min(0.5, self.retry_max_wait_seconds - exponential))
+        return min(self.retry_max_wait_seconds, exponential + jitter), False
+
+
+def _diagnostic_with_detail(diagnostic: ProviderDiagnostic, detail: str) -> ProviderDiagnostic:
+    return ProviderDiagnostic(
+        category=diagnostic.category,
+        message=diagnostic.message,
+        http_status=diagnostic.http_status,
+        provider_error_type=diagnostic.provider_error_type,
+        provider_error_code=diagnostic.provider_error_code,
+        detail=detail,
+        retry_after_seconds=diagnostic.retry_after_seconds,
+    )
 
 
 def source_description_fallback(
