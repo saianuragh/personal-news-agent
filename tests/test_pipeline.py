@@ -917,9 +917,9 @@ def test_mixed_source_llm_and_database_chaos_run_isolated_safe_and_persisted(
     }
     assert result.source_failures[0].http_status == 503
     assert result.newsletter is not None
-    # Each selected Technology story appears in Home and its Technology view.
-    assert result.newsletter.html.count("AI-generated summary") == 4
-    assert result.newsletter.html.count("Source description (fallback)") == 4
+    # The compact digest includes the source-summary fallback without extra labels.
+    assert "Original reporting detail." in result.newsletter.html
+    assert "Source description (fallback)" not in result.newsletter.html
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in result.newsletter.html
     assert "<script>alert(\"x\")</script>" not in result.newsletter.html
     assert (
@@ -1146,7 +1146,7 @@ def test_summarizer_failure_uses_source_fallback_and_is_counted(tmp_path: Path) 
     assert result.counts.summary_failures == 1
     assert result.counts.fallback_stories == 1
     assert result.newsletter is not None
-    assert "Source description (fallback)" in result.newsletter.html
+    assert "A company announced a new processor." in result.newsletter.html
 
 
 def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
@@ -1233,11 +1233,9 @@ def test_mixed_llm_outcomes_fallback_per_story_and_continue_pipeline(
         story_five: 1,
     }
     assert result.newsletter is not None
-    # The HTML includes Home and the matching category view; text stays one copy.
-    assert result.newsletter.html.count("AI-generated summary") == 6
-    assert result.newsletter.plain_text.count("AI-generated summary") == 3
-    assert result.newsletter.html.count("Source description (fallback)") == 2
-    assert result.newsletter.plain_text.count("Source description (fallback)") == 1
+    # The compact digest drops enrichment labels but retains source fallback text.
+    assert "AI-generated summary" not in result.newsletter.html
+    assert "Source description (fallback)" not in result.newsletter.html
     assert story_three not in result.newsletter.html
     assert story_five in result.newsletter.html
     assert "Source description for story 4." in result.newsletter.plain_text
@@ -1329,8 +1327,8 @@ def test_llm_rate_limit_falls_back_and_email_still_succeeds(tmp_path: Path) -> N
     assert result.status == "partial"
     assert result.counts.fallback_stories == 1
     assert result.newsletter is not None
-    assert "Source description (fallback)" in result.newsletter.html
-    assert "Source description (fallback)" in result.newsletter.plain_text
+    assert "A company announced a new processor." in result.newsletter.html
+    assert "A company announced a new processor." in result.newsletter.plain_text
     assert len(email_provider.messages) == 1
     assert result.delivery is not None and result.delivery.status == "accepted"
     failure = next(item for item in result.stage_failures if item.stage == "summarization")
@@ -1522,7 +1520,7 @@ def test_deterministic_as_of_is_used_for_sources_scoring_and_rendering(
     assert observed == [("source-a", AS_OF)]
     assert result.as_of == AS_OF
     assert result.newsletter is not None
-    assert "30 Sep 2026" in result.newsletter.html
+    assert "30 September 2026" in result.newsletter.html
 
 
 def test_configuration_failure_returns_structured_result(tmp_path: Path) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -29,24 +28,6 @@ SECTION_ORDER = (
     "Entertainment",
     "Unclassified",
 )
-NAV_LABELS = {
-    "Technology": "TECH",
-    "Business & Economy": "BUSINESS",
-    "Science & Space": "SCIENCE",
-}
-CATEGORY_SLUGS = {
-    "India": "india",
-    "World": "world",
-    "AI": "ai",
-    "Technology": "technology",
-    "Business & Economy": "business",
-    "Science & Space": "science",
-    "Sports": "sports",
-    "Entertainment": "entertainment",
-    "Unclassified": "unclassified",
-}
-
-
 @dataclass(frozen=True, slots=True)
 class NewsletterDocument:
     """Rendered alternatives and the story IDs included in the artifact."""
@@ -61,7 +42,7 @@ class NewsletterDocument:
 class _SourceDisplay:
     publisher: str
     url: str
-    published: str
+    published: str | None
     published_iso: str | None
     description: str | None
 
@@ -69,15 +50,10 @@ class _SourceDisplay:
 @dataclass(frozen=True, slots=True)
 class _StoryDisplay:
     story_id: UUID
-    number: int
-    anchor: str
     headline: str
     summary: str
-    summary_label: str
-    why_it_matters: str | None
     categories: tuple[str, ...]
     sources: tuple[_SourceDisplay, ...]
-    status: str
 
 
 def render_newsletter(
@@ -124,17 +100,23 @@ def render_newsletter(
     # accidentally promote a lower-ranked selected story to the feature.
     accepted.sort(key=lambda item: (item.ranked_story.rank, str(item.ranked_story.story.story_id)))
     display_by_id: dict[UUID, _StoryDisplay] = {}
-    for number, enriched in enumerate(accepted, 1):
+    for enriched in accepted:
         ranked = enriched.ranked_story
         story_id = ranked.story.story_id
-        ordered_articles = sorted(
-            ranked.story.members,
+        retained_article = ranked.story.retained_article
+        other_articles = sorted(
+            (
+                article
+                for article in ranked.story.members
+                if article.article_id != retained_article.article_id
+            ),
             key=lambda article: (
                 article.source_id.casefold(),
                 article.publisher.casefold(),
                 article.url,
             ),
         )
+        ordered_articles = [retained_article, *other_articles]
         sources = tuple(
             _SourceDisplay(
                 publisher=article.publisher,
@@ -142,7 +124,7 @@ def render_newsletter(
                 published=(
                     _format_time(article.published_at, zone)
                     if article.published_at is not None
-                    else "Publication time not provided"
+                    else None
                 ),
                 published_iso=(
                     article.published_at.isoformat() if article.published_at is not None else None
@@ -153,19 +135,10 @@ def render_newsletter(
         )
         display_by_id[story_id] = _StoryDisplay(
             story_id=story_id,
-            number=number,
-            anchor=f"story-{number:02d}",
             headline=ranked.story.retained_article.title,
-            summary=enriched.summary or "",
-            summary_label=(
-                "AI-generated summary"
-                if enriched.status == "generated"
-                else "Source description (fallback)"
-            ),
-            why_it_matters=enriched.why_it_matters,
+            summary=_compact_summary(enriched.summary or ""),
             categories=ranked.categories,
             sources=sources,
-            status=enriched.status,
         )
 
     category_groups: dict[str, list[_StoryDisplay]] = defaultdict(list)
@@ -174,51 +147,16 @@ def render_newsletter(
         for category in enriched.ranked_story.categories:
             category_groups[category].append(display)
 
-    timestamp = _format_time(generated_at, zone)
-    local_date = generated_at.astimezone(zone).strftime("%d %B %Y").upper()
-    categories = list(SECTION_ORDER[:-1])
-    categories.extend(sorted(set(category_groups) - set(categories), key=str.casefold))
-    category_anchors = _category_anchor_ids(categories)
+    local_date = generated_at.astimezone(zone).strftime("%d %B %Y")
     displays = [display_by_id[item.ranked_story.story.story_id] for item in accepted]
     html_categories = "\n".join(
         _render_html_category(
             category,
-            category_groups.get(category, []),
-            category_anchors[category],
-            generated_date=local_date,
+            category_groups[category][:3],
         )
-        for category in categories
+        for category in SECTION_ORDER[:-1]
+        if category_groups[category]
     )
-    view_states = '<span class="view-state" id="view-home"></span>' + "".join(
-        f'<span class="view-state" id="{category_anchors[category]}"></span>'
-        for category in categories
-    )
-    view_rules = (
-        "#view-home:target ~ .edition-nav a[href='#view-home'] "
-        "{color:#b3261e!important;border-bottom:2px solid #b3261e!important;}"
-        "#view-home:target ~ .edition-content .home-view {display:block!important;}"
-        "#view-home:target ~ .edition-content .category-view {display:none!important;}"
-        + "".join(
-            f"#{category_anchors[category]}:target ~ .edition-nav "
-            f"a[href='#{category_anchors[category]}'] "
-            "{color:#b3261e!important;border-bottom:2px solid #b3261e!important;}"
-            f"#{category_anchors[category]}:target ~ .edition-content .home-view "
-            "{display:none!important;}"
-            f"#{category_anchors[category]}:target ~ .edition-content "
-            f".{_view_class(category_anchors[category])} {{display:block!important;}}"
-            for category in categories
-        )
-    )
-    html_navigation = (
-        '<a class="nav-link today-link" href="#view-home">TODAY</a>'
-        + "".join(
-            f'<a class="nav-link" href="#{category_anchors[category]}">'
-            f'{escape(NAV_LABELS.get(category, category.upper()))}</a>'
-            for category in categories
-        )
-    )
-    count = len(displays)
-    story_word = "story" if count == 1 else "stories"
     addon_html, addon_text = _render_addons(displays, generated_at)
     template_source = (
         template_path.read_text(encoding="utf-8")
@@ -228,14 +166,8 @@ def render_newsletter(
     template = Template(template_source)
     html_body = template.substitute(
         title=escape(title),
-        generated_at=escape(timestamp),
         generated_iso=escape(generated_at.isoformat()),
         local_date=escape(local_date),
-        count=str(count),
-        story_word=story_word,
-        view_rules=view_rules,
-        navigation=html_navigation,
-        view_states=view_states,
         empty_notice=(
             '<p class="empty-state">No eligible stories are available today. '
             "Check back soon for your next briefing.</p>"
@@ -243,16 +175,14 @@ def render_newsletter(
             else ""
         ),
         addons=addon_html,
-        featured=_render_html_story(displays[0], featured=True) if displays else "",
-        feed=(
-            "\n".join(_render_html_story(item, featured=False) for item in displays[1:])
-            if len(displays) > 1
-            else ""
+        top_stories="\n".join(
+            _render_html_story(item, featured=index == 1)
+            for index, item in enumerate(displays[:5], 1)
         ),
         categories=html_categories,
     )
 
-    text_sections = [_render_text_story(display) for display in displays]
+    text_sections = [_render_text_story(display) for display in displays[:5]]
     category_indexes = [
         _render_text_category(category, category_groups[category])
         for category in SECTION_ORDER[:-1]
@@ -266,13 +196,12 @@ def render_newsletter(
     )
     plain_text = "\n\n".join(
         (
-            "DAILY NEWS",
+            "PERSONAL NEWS",
             local_date,
-            f"Generated: {timestamp}",
-            *addon_text,
-            "TODAY'S STORIES",
+            "TOP 5",
             *(text_sections or ["No eligible stories are available today. Check back soon."]),
             *category_indexes,
+            *addon_text,
         )
     )
     return NewsletterDocument(
@@ -283,39 +212,26 @@ def render_newsletter(
     )
 
 
+SUMMARY_LIMIT = 180
+
+
+def _compact_summary(value: str, maximum: int = SUMMARY_LIMIT) -> str:
+    """Keep the email index scannable without changing the underlying story data."""
+    text = " ".join(value.split())
+    if len(text) <= maximum:
+        return text
+    excerpt = text[: maximum - 1]
+    if " " in excerpt:
+        excerpt = excerpt.rsplit(" ", 1)[0]
+    return f"{excerpt.rstrip(' ,;:.-')}…"
+
+
 def _render_addons(
     stories: list[_StoryDisplay], generated_at: datetime
 ) -> tuple[str, list[str]]:
-    """Build editorial extras only from selected, source-linked stories."""
+    """Render compact, source-linked editorial extras from existing selected stories."""
     blocks: list[str] = []
     text_blocks: list[str] = []
-
-    top_stories = stories[:5]
-    if top_stories:
-        cards: list[str] = []
-        text_lines = ["TOP STORIES"]
-        for number, story in enumerate(top_stories, 1):
-            source = story.sources[0]
-            why = story.why_it_matters
-            cards.append(
-                '<article class="addon-story"><p class="addon-number">'
-                f'{number:02d} · {escape(", ".join(story.categories))}</p>'
-                f'<h3><a href="{escape(source.url, quote=True)}">{escape(story.headline)}</a></h3>'
-                f'<p>{escape(story.summary)}</p>'
-                + (f'<p class="addon-why">Why it matters: {escape(why)}</p>' if why else "")
-                + f'<p class="addon-source">{escape(source.publisher)} · '
-                f'<a href="{escape(source.url, quote=True)}">Original report</a></p></article>'
-            )
-            text_lines.extend(
-                [
-                    f"{number:02d}. {story.headline}",
-                    story.summary,
-                    *([f"Why it matters: {why}"] if why else []),
-                    f"Source: {source.publisher} — {source.url}",
-                ]
-            )
-        blocks.append(_addon_section("TOP STORIES", "Five highest-ranked stories", cards))
-        text_blocks.append("\n".join(text_lines))
 
     recent: list[_StoryDisplay] = []
     cutoff = generated_at.timestamp() - 24 * 60 * 60
@@ -327,32 +243,39 @@ def _render_addons(
                     recent.append(story)
             except ValueError:
                 continue
-        if len(recent) == 5:
+        if len(recent) == 3:
             break
     if recent:
-        blocks.append(
-            _addon_section(
-                "IMPORTANT TODAY",
-                "Recent coverage prioritized by the story ranking",
-                [_addon_link_story(story) for story in recent],
-            )
+        links = "".join(
+            '<li style="padding:3px 0;color:#383838;font-size:12px;line-height:1.45">'
+            f'<a style="color:#383838;text-decoration:none" '
+            f'href="{escape(story.sources[0].url, quote=True)}">'
+            f'{escape(story.headline)} — {escape(story.sources[0].publisher)}</a></li>'
+            for story in recent
         )
+        blocks.append(_addon_section("⚡ IMPORTANT TODAY", f"<ul>{links}</ul>"))
         text_blocks.append(
-            "IMPORTANT TODAY\n" + "\n".join(f"• {story.headline}" for story in recent)
+            "IMPORTANT TODAY\n"
+            + "\n".join(
+                f"• {story.headline} — {story.sources[0].publisher}: {story.sources[0].url}"
+                for story in recent
+            )
         )
 
     ai_stories = [story for story in stories if "AI" in story.categories][:3]
     if ai_stories:
         blocks.append(
             _addon_section(
-                "AI WATCH",
-                "Leading AI developments in today's coverage",
-                [_addon_link_story(story, include_summary=True) for story in ai_stories],
+                "🤖 AI WATCH",
+                "".join(
+                    _render_html_story(story, featured=False, compact=True)
+                    for story in ai_stories
+                ),
             )
         )
         text_blocks.append(
             "AI WATCH\n"
-            + "\n\n".join(f"{story.headline}\n{story.summary}" for story in ai_stories)
+            + "\n\n".join(_render_text_story(story) for story in ai_stories)
         )
 
     fact_story = next(
@@ -365,38 +288,32 @@ def _render_addons(
     )
     if fact_story is not None:
         source = fact_story.sources[0]
-        fact = _first_sentence(source.description or "")[:240]
+        fact = _compact_summary(_first_sentence(source.description or ""), 200)
         if fact:
             blocks.append(
-                '<section class="newspaper-addon"><p class="addon-label">FACT OF THE DAY</p>'
-                f'<p>{escape(fact)}</p><p class="addon-source">Source-reported · '
-                f'{escape(source.publisher)} · <a href="{escape(source.url, quote=True)}">'
-                "Original report</a></p></section>"
+                _addon_section(
+                    "🧠 FACT OF THE DAY",
+                    '<p style="margin:0 0 7px;color:#383838;font-size:13px;line-height:1.5">'
+                    f'{escape(fact)}</p><p class="metadata" style="margin:0;color:#77736d;'
+                    'font-size:10px;line-height:1.4">Source-reported · '
+                    f'{escape(source.publisher)} · '
+                    f'<a href="{escape(source.url, quote=True)}">Read</a></p>',
+                )
             )
             text_blocks.append(
-                f"FACT OF THE DAY\n{fact}\nSource-reported by {source.publisher}: {source.url}"
+                f"FACT OF THE DAY\n{fact}\nSource: {source.publisher} · {source.url}"
             )
 
     return "\n".join(blocks), text_blocks
 
 
-def _addon_section(label: str, subtitle: str, cards: list[str]) -> str:
+def _addon_section(label: str, content: str) -> str:
     return (
-        '<section class="newspaper-addon"><p class="addon-label">'
-        f'{escape(label)}</p><p class="addon-subtitle">{escape(subtitle)}</p>'
-        + "".join(cards)
-        + "</section>"
-    )
-
-
-def _addon_link_story(story: _StoryDisplay, *, include_summary: bool = False) -> str:
-    source = story.sources[0]
-    summary = f"<p>{escape(story.summary)}</p>" if include_summary else ""
-    return (
-        '<article class="addon-story"><h3>'
-        f'<a href="{escape(source.url, quote=True)}">{escape(story.headline)}</a></h3>'
-        f'{summary}<p class="addon-source">{escape(source.publisher)} · '
-        f'<a href="{escape(source.url, quote=True)}">Original report</a></p></article>'
+        '<section class="addon" style="margin-top:22px;padding-top:14px;'
+        'border-top:1px solid #dedbd5"><h2 class="section-heading" '
+        'style="margin:0 0 4px;color:#77736d;font-size:10px;font-weight:bold;'
+        'letter-spacing:1.4px">'
+        f'{escape(label)}</h2>{content}</section>'
     )
 
 
@@ -408,144 +325,67 @@ def _first_sentence(text: str) -> str:
 
 
 def _render_html_story(
-    display: _StoryDisplay,
-    *,
-    featured: bool,
-    number: int | None = None,
-    anchor: str | None = None,
+    display: _StoryDisplay, *, featured: bool, compact: bool = False
 ) -> str:
-    category_badges = "".join(
-        f'<span class="category-badge">{escape(category)}</span>'
-        for category in display.categories
+    source = display.sources[0]
+    category = display.categories[0] if display.categories else "NEWS"
+    metadata = " · ".join(
+        value for value in (source.publisher, source.published) if value
     )
-    primary_source = display.sources[0]
-    publisher_line = f"{escape(primary_source.publisher)} · {escape(primary_source.published)}"
-    additional_sources = "".join(
-        f'<a class="source-link" href="{escape(source.url, quote=True)}">'
-        f"{escape(source.publisher)}</a>"
-        for source in display.sources[1:]
-    )
-    summary = (
-        f'<p class="summary-label">{escape(display.summary_label)}</p>'
-        f'<p class="summary">{escape(display.summary)}</p>'
-    )
-    significance = (
-        '<div class="why"><p class="why-label">WHY IT MATTERS</p>'
-        f'<p>{escape(display.why_it_matters)}</p></div>'
-        if display.why_it_matters
-        else ""
-    )
-    css_class = "story-card featured-card" if featured else "story-card feed-card"
-    inline_story_style = (
-        "margin:0 0 27px;padding:22px 0 24px;background:#fffefa;"
-        "border-top:2px solid #b3261e;border-bottom:1px solid #d7d3cc;"
-        if featured
-        else "margin:0;padding:20px 0;background:transparent;border-bottom:1px solid #d7d3cc;"
-    )
-    kicker = '<span class="top-story">TOP STORY</span>' if featured else ""
-    cta_label = "READ FULL STORY →" if featured else "READ STORY →"
-    story_number = display.number if number is None else number
-    story_anchor = display.anchor if anchor is None else anchor
+    class_name = "story lead" if featured else "story compact" if compact else "story"
     return (
-        f'<article class="{css_class}" id="{story_anchor}" '
-        f'style="{inline_story_style}">'
-        '<table role="presentation" class="story-layout"><tbody><tr>'
-        f'<td class="story-number">{story_number:02d}</td>'
-        '<td class="story-content">'
-        f'<p class="story-kicker">{kicker}{category_badges}</p>'
-        f'<h2 class="story-title">{escape(display.headline)}</h2>'
-        f'<p class="metadata">{publisher_line}</p>'
-        f'{summary}{significance}'
-        f'<a class="story-cta" href="{escape(primary_source.url, quote=True)}" '
-        'style="display:inline-block;margin:5px 0 0;padding:10px 0;'
-        'border-bottom:1px solid #b3261e;color:#b3261e;font-size:10px;'
-        'font-weight:bold;letter-spacing:.8px;text-decoration:none">'
-        f"{cta_label}</a>"
-        f'<p class="additional-sources">{additional_sources}</p>'
-        '</td></tr></tbody></table></article>'
+        f'<article class="{class_name}" style="padding:15px 0;'
+        'border-bottom:1px solid #e7e3dc;">'
+        f'<p class="category" style="margin:0;color:#9e2924;font-size:9px;font-weight:bold;'
+        f'letter-spacing:1.2px">{escape(category.upper())}</p>'
+        f'<h3 style="margin:3px 0 6px;font-family:Georgia,\'Times New Roman\',serif;'
+        f'font-size:{15 if compact else 19}px;line-height:1.3">'
+        f'<a style="color:#171717;text-decoration:none" '
+        f'href="{escape(source.url, quote=True)}">{escape(display.headline)}</a></h3>'
+        f'<p class="summary" style="margin:0 0 7px;color:#383838;font-size:'
+        f'{12 if compact else 13}px;line-height:1.5">{escape(display.summary)}</p>'
+        f'<p class="metadata" style="margin:0 0 5px;color:#77736d;font-size:10px;'
+        f'line-height:1.4">{escape(metadata)}</p>'
+        f'<a class="read-more" style="display:inline-block;padding:5px 0;color:#9e2924;'
+        f'font-size:10px;font-weight:bold;letter-spacing:.7px;text-decoration:none" '
+        f'href="{escape(source.url, quote=True)}">'
+        f'{"→ READ" if compact else "READ MORE →"}</a></article>'
     )
 
 
-def _render_html_category(
-    category: str,
-    members: list[_StoryDisplay],
-    anchor: str,
-    *,
-    generated_date: str,
-) -> str:
-    class_name = _view_class(anchor)
+def _render_html_category(category: str, members: list[_StoryDisplay]) -> str:
     stories = "".join(
-        _render_html_story(
-            display,
-            featured=False,
-            number=index,
-            anchor=f"{anchor}-story-{index:02d}",
-        )
-        for index, display in enumerate(members, 1)
-    )
-    empty = (
-        '<p class="empty-category">No stories in this category in today\'s briefing.</p>'
-        if not members
-        else ""
+        _render_html_story(display, featured=False, compact=True) for display in members[:3]
     )
     return (
-        f'<section class="newsletter-view category-view {class_name}">'
-        f'<p class="view-kicker">CATEGORY EDITION · {escape(generated_date)}</p>'
-        f'<h2 class="category-title">{escape(category)}</h2>'
-        f'<p class="view-subtitle">YOUR DAILY NEWS, SELECTED</p>'
-        f'{stories}{empty}'
-        '<p class="back-row"><a class="back-to-home" href="#view-home" '
-        'style="display:inline-block;padding:12px 0;color:#5f5f5f;font-size:10px;'
-        'font-weight:bold;letter-spacing:.8px;text-decoration:none;border-top:1px solid #d7d3cc">'
-        "← BACK TO HOME</a></p></section>"
+        '<section class="category-section" style="margin-top:20px">'
+        f'<h2 class="section-heading" style="margin:0;padding:14px 0 4px;border-top:1px solid '
+        f'#dedbd5;color:#171717;font-family:Georgia,\'Times New Roman\',serif;font-size:17px">'
+        f'{escape(category)}</h2>{stories}</section>'
     )
 
 
-def _category_anchor_ids(categories: list[str]) -> dict[str, str]:
-    """Create stable, email-friendly fragment IDs for populated categories."""
-    result: dict[str, str] = {}
-    used: set[str] = set()
-    for category in categories:
-        slug = CATEGORY_SLUGS.get(category)
-        if slug is None:
-            slug = re.sub(r"[^a-z0-9]+", "-", category.casefold()).strip("-") or "category"
-        candidate = f"category-{slug}"
-        suffix = 2
-        while candidate in used:
-            candidate = f"category-{slug}-{suffix}"
-            suffix += 1
-        used.add(candidate)
-        result[category] = candidate
-    return result
-
-
-def _render_text_story(display: _StoryDisplay) -> str:
+def _render_text_story(display: _StoryDisplay, *, compact: bool = False) -> str:
+    source = display.sources[0]
+    metadata = " · ".join(value for value in (source.publisher, source.published) if value)
     lines = [
-        f"{display.number:02d}. {display.headline}",
-        f"   {display.sources[0].publisher} · {display.sources[0].published}",
-        f"{display.summary_label}: {display.summary}",
+        display.categories[0] if display.categories else "NEWS",
+        display.headline,
+        display.summary,
+        metadata,
     ]
-    if display.why_it_matters:
-        lines.append(f"Why it matters: {display.why_it_matters}")
-    lines.append(f"Read: {display.sources[0].url}")
-    if len(display.sources) > 1:
-        lines.append("Other sources:")
-        lines.extend(f"- {source.publisher}: {source.url}" for source in display.sources[1:])
-    return "\n".join(lines)
+    lines.append(f"→ Read: {source.url}" if compact else f"READ MORE: {source.url}")
+    return "\n".join(line for line in lines if line)
 
 
 def _render_text_category(category: str, members: list[_StoryDisplay]) -> str:
-    lines = [f"{category}\n{'=' * len(category)}"]
-    lines.extend(f"{display.number:02d}. {display.headline}" for display in members)
-    return "\n".join(lines)
-
-
-def _view_class(anchor: str) -> str:
-    return f"category-view-{anchor.removeprefix('category-')}"
+    lines = [category.upper()]
+    lines.extend(_render_text_story(display, compact=True) for display in members[:3])
+    return "\n\n".join(lines)
 
 
 def _format_time(value: datetime, zone: ZoneInfo) -> str:
-    return value.astimezone(zone).strftime("%a, %d %b %Y %H:%M %Z")
+    return value.astimezone(zone).strftime("%H:%M %Z")
 
 
 def _load_timezone(timezone_name: str) -> ZoneInfo:

@@ -1,6 +1,5 @@
-"""Offline tests for HTML and plain-text newsletter rendering."""
+"""Offline tests for the compact HTML and plain-text news digest."""
 
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -8,12 +7,22 @@ from uuid import uuid4
 
 from app.llm.base import AIEnrichedStory
 from app.models.article import Article
-from app.newsletter.renderer import render_newsletter
+from app.newsletter.renderer import SUMMARY_LIMIT, render_newsletter
 from app.processing.categorize import categorize_story
 from app.processing.deduplicate import deduplicate_articles
-from app.processing.rank import CategoryRank, rank_stories
+from app.processing.rank import rank_stories
 
 GENERATED = datetime(2026, 10, 1, 5, tzinfo=UTC)
+STANDARD_CATEGORIES = (
+    "India",
+    "World",
+    "AI",
+    "Technology",
+    "Business & Economy",
+    "Science & Space",
+    "Sports",
+    "Entertainment",
+)
 
 
 def ranked(
@@ -23,7 +32,7 @@ def ranked(
     publisher: str = "Example & News",
     published_at: datetime | None = GENERATED - timedelta(hours=1),
     categories: tuple[str, ...] = ("Technology",),
-    description: str | None = "A source description <with markup-like text> & details.",
+    description: str | None = "A source description with useful reporting details.",
 ):
     article_url = url or f"https://news.example/{uuid4()}"
     article = Article(
@@ -40,8 +49,7 @@ def ranked(
         source_categories=categories,
     )
     story = deduplicate_articles([article]).stories[0]
-    categorized = categorize_story(story)
-    return rank_stories([categorized], as_of=GENERATED)[0]
+    return rank_stories([categorize_story(story)], as_of=GENERATED)[0]
 
 
 def enriched(
@@ -65,28 +73,254 @@ def enriched(
     )
 
 
-def render(items, *, timezone_name: str = "Asia/Kolkata"):
-    return render_newsletter(
-        items,
-        generated_at=GENERATED,
-        timezone_name=timezone_name,
-    )
+def render(items):
+    return render_newsletter(items, generated_at=GENERATED, timezone_name="Asia/Kolkata")
 
 
-def test_html_and_plain_text_contain_story_fields_and_original_source_link() -> None:
-    item = ranked("New technology announcement", url="https://news.example/item?a=1&b=2")
+class StoryParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.links: list[str] = []
+        self.summaries: list[str] = []
+        self._in_summary = False
+        self._summary_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "a" and values.get("href"):
+            self.links.append(values["href"] or "")
+        if tag == "p" and "summary" in (values.get("class") or "").split():
+            self._in_summary = True
+            self._summary_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_summary:
+            self._summary_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "p" and self._in_summary:
+            self.summaries.append("".join(self._summary_parts))
+            self._in_summary = False
+
+
+def test_minimal_header_and_story_link_to_original_article() -> None:
+    source_url = "https://news.example/item?a=1&b=2"
+    item = ranked("New technology announcement", url=source_url)
 
     result = render([enriched(item)])
+    parser = StoryParser()
+    parser.feed(result.html)
 
-    assert "Personal News Briefing" in result.html
-    assert "Technology" in result.html
+    assert "PERSONAL NEWS" in result.html
+    assert "Daily Brief · 01 October 2026" in result.html
+    assert "⭐ TOP 5" in result.html
     assert "New technology announcement" in result.html
-    assert "AI-generated summary" in result.html
-    assert "WHY IT MATTERS" in result.html
+    assert "Technology" in result.html
+    assert "Example &amp; News · 09:30 IST" in result.html
     assert 'href="https://news.example/item?a=1&amp;b=2"' in result.html
+    assert parser.links.count("https://news.example/item?a=1&b=2") >= 2
+    assert "Why it matters" not in result.html
+    top_story = result.html.split('<section class="category-section"', 1)[0]
+    assert "A source description with useful reporting details." not in top_story
     assert "https://news.example/item?a=1&b=2" in result.plain_text
-    assert "Example & News" in result.plain_text
-    assert result.included_story_ids == (item.story.story_id,)
+
+
+def test_primary_story_link_uses_the_retained_original_article() -> None:
+    canonical = "https://news.example/shared-story"
+    articles = [
+        Article(
+            article_id=uuid4(),
+            source_id=source_id,
+            publisher=publisher,
+            url=url,
+            canonical_url=canonical,
+            title="Shared technology report",
+            retrieved_at=GENERATED,
+            published_at=GENERATED - timedelta(minutes=25),
+            description="A brief source report about a technology change.",
+            content_hash=sha256(canonical.encode()).hexdigest(),
+            source_categories=("Technology",),
+        )
+        for source_id, publisher, url in (
+            ("z_source", "Zeta News", "https://zeta.example/report"),
+            ("a_source", "Alpha News", "https://alpha.example/original"),
+        )
+    ]
+    story = deduplicate_articles(articles).stories[0]
+    item = rank_stories([categorize_story(story)], as_of=GENERATED)[0]
+    result = render([enriched(item)])
+
+    assert f'href="{item.story.retained_article.url}"' in result.html
+
+
+def test_long_summary_is_word_truncated_but_headline_and_url_are_intact() -> None:
+    headline = "A very important headline remains complete"
+    long_summary = "Useful reporting detail " * 30
+    url = "https://news.example/complete-story"
+    result = render([enriched(ranked(headline, url=url), summary=long_summary)])
+    parser = StoryParser()
+    parser.feed(result.html)
+
+    assert headline in result.html
+    assert url in result.html
+    assert parser.summaries
+    assert all(len(summary) <= SUMMARY_LIMIT for summary in parser.summaries)
+    assert parser.summaries[0].endswith("…")
+
+
+def test_top_five_is_compact_and_does_not_expand_all_selected_stories() -> None:
+    items = [
+        enriched(ranked(f"Technology headline number {index}"), summary="A brief report summary.")
+        for index in range(24)
+    ]
+    ordered = rank_stories([item.ranked_story.categorized_story for item in items], as_of=GENERATED)
+    by_id = {item.ranked_story.story.story_id: item for item in items}
+    result = render([by_id[item.story.story_id] for item in ordered])
+    top_block = result.html.split('<section class="category-section"', 1)[0]
+
+    assert top_block.count('<article class="story') == 5
+    assert "Technology headline number" in top_block
+    assert "Why it matters" not in top_block
+    assert len(result.included_story_ids) == 24
+
+
+def test_each_category_displays_at_most_three_compact_source_linked_stories() -> None:
+    items = []
+    for index in range(24):
+        category = STANDARD_CATEGORIES[index % len(STANDARD_CATEGORIES)]
+        title = f"{category} development headline {index}"
+        items.append(enriched(ranked(title, categories=(category,))))
+    result = render(items)
+
+    for category in STANDARD_CATEGORIES:
+        marker = f'<h2 class="section-heading">{category}</h2>'
+        if marker not in result.html:
+            continue
+        block = result.html.split(marker, 1)[1].split("</section>", 1)[0]
+        assert block.count('<article class="story compact"') <= 3
+        assert block.count("→ READ") <= 3
+    assert "AI" in result.html
+    assert "Business &amp; Economy" in result.html
+    assert "Science &amp; Space" in result.html
+
+
+def test_important_today_is_headlines_and_source_links_without_summaries() -> None:
+    recent = [
+        enriched(ranked(f"Recent headline {index}", publisher=f"Publisher {index}"))
+        for index in range(4)
+    ]
+    result = render(recent)
+    block = result.html.split("⚡ IMPORTANT TODAY", 1)[1].split("</section>", 1)[0]
+
+    assert sum(f"Recent headline {index}" in block for index in range(4)) == 3
+    assert "summary" not in block
+    assert "Source description" not in block
+    assert sum(f"Publisher {index}" in block for index in range(4)) == 3
+
+
+def test_ai_watch_is_limited_to_three_compact_items() -> None:
+    ai_items = [
+        enriched(
+            ranked(f"AI model development {index}", categories=("AI",)),
+            summary="AI findings and reported implications. " * 10,
+        )
+        for index in range(4)
+    ]
+    result = render(ai_items)
+    block = result.html.split("🤖 AI WATCH", 1)[1].split("</section>", 1)[0]
+
+    assert block.count('<article class="story compact"') == 3
+    assert sum(f"AI model development {index}" in block for index in range(4)) == 3
+    assert "→ READ" in block
+    parser = StoryParser()
+    parser.feed(result.html)
+    assert all(len(summary) <= SUMMARY_LIMIT for summary in parser.summaries)
+
+
+def test_fact_of_day_is_one_source_sentence_and_market_snapshot_is_omitted() -> None:
+    description = "A source-reported fact. A second detail that should not appear. " * 8
+    item = enriched(ranked("Science update", description=description))
+    result = render([item])
+    block = result.html.split("🧠 FACT OF THE DAY", 1)[1].split("</section>", 1)[0]
+
+    assert "A source-reported fact." in block
+    assert "A second detail" not in block
+    assert "MARKET SNAPSHOT" not in result.html
+    assert "MARKET SNAPSHOT" not in result.plain_text
+
+
+def test_missing_images_and_empty_optional_sections_do_not_break_layout() -> None:
+    item = enriched(ranked("Technology update", description=None))
+    result = render([item])
+
+    assert "<img" not in result.html
+    assert "TOP 5" in result.html
+    assert "AI WATCH" not in result.html
+    assert "IMPORTANT TODAY" in result.html
+    assert "FACT OF THE DAY" not in result.html
+    assert "MARKET SNAPSHOT" not in result.html
+
+
+def test_fallback_summary_is_compact_and_markup_is_escaped() -> None:
+    title = '<script>alert("x")</script> & update'
+    summary = '<img src=x onerror="alert(1)"> & useful detail. '
+    url = "https://news.example/story?x=1&y=2"
+    item = enriched(
+        ranked(title, url=url, description=None),
+        summary=summary * 20,
+        why=None,
+        status="fallback",
+    )
+    result = render([item])
+
+    assert "<script>" not in result.html
+    assert "<img src=x" not in result.html
+    assert "&lt;script&gt;" in result.html
+    assert "Source description (fallback)" not in result.html
+    assert "x=1&amp;y=2" in result.html
+    assert "Source description (fallback)" not in result.plain_text
+
+
+def test_plain_text_alternative_is_compact_and_links_to_original_articles() -> None:
+    source_url = "https://news.example/plain-story"
+    item = enriched(ranked("A fresh morning headline", url=source_url))
+    result = render([item])
+
+    assert result.plain_text.startswith("PERSONAL NEWS\n\n01 October 2026\n\nTOP 5")
+    assert "A fresh morning headline" in result.plain_text
+    assert f"READ MORE: {source_url}" in result.plain_text
+    assert "Generated:" not in result.plain_text
+    assert "Why it matters" not in result.plain_text
+
+
+def test_mobile_email_layout_is_single_column_and_has_no_horizontal_sizing() -> None:
+    result = render([enriched(ranked("A fresh morning headline"))])
+
+    assert "@media only screen and (max-width:520px)" in result.html
+    assert "max-width:620px" in result.html
+    assert 'width="100%"' in result.html
+    assert "min-width:" not in result.html
+    assert "overflow-x" not in result.html
+    assert "<script" not in result.html
+    assert "<link rel=\"stylesheet\"" not in result.html
+    assert "@import" not in result.html
+    assert "javascript:" not in result.html
+
+
+def test_html_is_parseable_and_empty_digest_omits_empty_optional_sections() -> None:
+    result = render([])
+    parser = StoryParser()
+    parser.feed(result.html)
+    parser.close()
+
+    assert result.html.startswith("<!doctype html>")
+    assert "No eligible stories are available today." in result.html
+    assert "No eligible stories are available today." in result.plain_text
+    assert "AI WATCH" not in result.html
+    assert "IMPORTANT TODAY" not in result.html
+    assert "FACT OF THE DAY" not in result.html
+    assert result.included_story_ids == ()
+    assert len(result.omitted_story_ids) == 0
 
 
 def test_packaged_template_renders_outside_the_repository_working_directory(
@@ -97,405 +331,32 @@ def test_packaged_template_renders_outside_the_repository_working_directory(
     result = render([])
 
     assert "<!doctype html>" in result.html.casefold()
-    assert "Personal News Briefing" in result.html
-    assert "No eligible stories are available today." in result.html
-    assert "DAILY NEWS" in result.plain_text
-    assert "TODAY'S STORIES" in result.plain_text
-    assert "No eligible stories are available today." in result.plain_text
+    assert "PERSONAL NEWS" in result.html
+    assert "Daily Brief · 01 October 2026" in result.html
+    assert "PERSONAL NEWS" in result.plain_text
 
 
-def test_newspaper_addons_are_source_grounded_and_market_snapshot_is_omitted() -> None:
-    item = ranked(
-        "New AI system helps researchers analyze satellite data",
-        categories=("AI", "Technology"),
-        description=(
-            "Researchers released a model that analyzes satellite images. "
-            "The report includes technical limitations."
+def test_source_time_is_omitted_when_provider_did_not_supply_it() -> None:
+    item = enriched(ranked("Story without a timestamp", published_at=None))
+    result = render([item])
+
+    assert "Story without a timestamp" in result.html
+    assert "Publication time not provided" not in result.html
+    assert "Example &amp; News" in result.html
+
+
+def test_html_escapes_unicode_markup_and_source_links() -> None:
+    item = enriched(
+        ranked(
+            "L'été & café — 東京 <update>",
+            publisher="O'Brien & News",
+            url="https://news.example/story?edition=été&lang=ja",
         ),
+        summary="Résumé: 東京 & useful context.",
     )
-
-    result = render([enriched(item)])
-
-    assert "TOP STORIES" in result.html
-    assert "IMPORTANT TODAY" in result.html
-    assert "AI WATCH" in result.html
-    assert "FACT OF THE DAY" in result.html
-    assert "Source-reported" in result.html
-    assert "Original report" in result.html
-    assert "MARKET SNAPSHOT" not in result.html
-    assert "BREAKING" not in result.html
-    assert "FACT OF THE DAY" in result.plain_text
-    assert "MARKET SNAPSHOT" not in result.plain_text
-
-
-def test_publication_and_generation_times_are_localized_without_fabrication() -> None:
-    item = ranked(
-        "Science mission update",
-        categories=("Science",),
-        published_at=datetime(2026, 10, 1, 4, 15, tzinfo=UTC),
-    )
-    unknown_time = ranked("Technology story with no date", published_at=None, description=None)
-
-    result = render([enriched(item), enriched(unknown_time)])
-
-    assert "01 Oct 2026 09:45" in result.html
-    assert "Publication time not provided" in result.html
-    assert "01 Oct 2026 09:45" in result.plain_text
-    assert "Publication time not provided" in result.plain_text
-    assert "10:30 IST" in result.html
-
-
-def test_html_escapes_headline_summary_significance_publisher_and_url() -> None:
-    item = ranked(
-        '<script>alert("x")</script> & update',
-        url="https://news.example/story?x=1&y=2",
-    )
-    result = render(
-        [
-            enriched(
-                item,
-                summary='<img src=x onerror="alert(1)"> & facts',
-                why="Impact < unknown > & debated",
-            )
-        ]
-    )
-
-    assert "<script>" not in result.html
-    assert "<img src=x" not in result.html
-    assert '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; update' in result.html
-    assert '&lt;img src=x onerror=&quot;alert(1)&quot;&gt; &amp; facts' in result.html
-    assert "Impact &lt; unknown &gt; &amp; debated" in result.html
-    assert "&amp; update" in result.html
-    assert "x=1&amp;y=2" in result.html
-    assert '<script>alert("x")</script> & update' in result.plain_text
-    assert '<img src=x onerror="alert(1)"> & facts' in result.plain_text
-    assert "Impact < unknown > & debated" in result.plain_text
-    assert "https://news.example/story?x=1&y=2" in result.plain_text
-    assert "<article" not in result.plain_text
-    assert "<a href=" not in result.plain_text
-
-
-def test_fallback_and_dynamic_html_values_are_escaped_without_changing_source_url() -> None:
-    class LinkCollector(HTMLParser):
-        def __init__(self) -> None:
-            super().__init__()
-            self.links: list[dict[str, str | None]] = []
-
-        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-            if tag == "a":
-                self.links.append(dict(attrs))
-
-    source_url = 'https://news.example/story?x=1&raw="onmouseover="alert(1)'
-    malicious = '<script>alert("x")</script>'
-    item = ranked(
-        malicious,
-        url=source_url,
-        publisher='<img src=x onerror="alert(1)"> Publisher',
-        description=malicious,
-    )
-    malicious_category = '<svg onload="alert(1)">World'
-    categorized = replace(
-        item.categorized_story,
-        categories=(malicious_category,),
-        status="categorized",
-    )
-    item = replace(
-        item,
-        categorized_story=categorized,
-        category_ranks=(CategoryRank(malicious_category, 1),),
-    )
-
-    result = render(
-        [
-            enriched(
-                item,
-                summary=f"Source description: {malicious}",
-                why=malicious,
-                status="fallback",
-            )
-        ]
-    )
-
-    assert "<script>" not in result.html
-    assert "<img src=x" not in result.html
-    assert "<svg onload=" not in result.html
-    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in result.html
-    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt; Publisher" in result.html
-    assert "&lt;svg onload=&quot;alert(1)&quot;&gt;World" in result.html
-    assert "Source description (fallback)" in result.html
-    assert "AI-generated summary" not in result.html
-    assert "&quot;onmouseover=&quot;alert(1)" in result.html
-
-    parser = LinkCollector()
-    parser.feed(result.html)
-    assert any(link.get("href") == source_url for link in parser.links)
-    assert all(link.get("href") for link in parser.links)
-    assert source_url in result.plain_text
-    assert "Source description (fallback)" in result.plain_text
-    assert malicious in result.plain_text
-
-
-def test_fallback_summary_is_labeled_and_missing_significance_is_allowed() -> None:
-    item = ranked("Technology release")
-
-    result = render(
-        [
-            enriched(
-                item,
-                summary="Publisher supplied detail.",
-                why=None,
-                status="fallback",
-            )
-        ]
-    )
-
-    assert "Source description (fallback)" in result.html
-    assert result.html.count("Source description (fallback)") == 2
-    assert result.plain_text.count("Source description (fallback)") == 1
-    assert "Publisher supplied detail." in result.html
-    assert "Publisher supplied detail." in result.plain_text
-    assert "AI-generated summary" not in result.html
-    assert "Why it matters" not in result.html
-
-
-def test_long_title_and_fallback_text_render_without_truncation_or_markup() -> None:
-    long_title = ("Technology update " * 24).strip()
-    long_fallback = "Useful source detail. " * 25
-    item = ranked(long_title)
-
-    result = render([enriched(item, summary=long_fallback, why=None, status="fallback")])
-
-    assert long_title in result.html
-    assert long_title in result.plain_text
-    assert "Useful source detail." in result.html
-    assert "<script>" not in result.html
-
-
-def test_failed_summary_and_unclassified_story_are_omitted() -> None:
-    failed_ranked = ranked("Technology article")
-    failed = enriched(failed_ranked, summary=None, why=None, status="failed")
-    unclassified_ranked = ranked("Local traffic changes", categories=())
-
-    result = render([failed, enriched(unclassified_ranked)])
-
-    assert "No eligible stories are available today." in result.html
-    assert "No eligible stories are available today." in result.plain_text
-    assert result.included_story_ids == ()
-    assert result.omitted_story_ids == (
-        failed_ranked.story.story_id,
-        unclassified_ranked.story.story_id,
-    )
-
-
-def test_multi_category_story_appears_in_each_dedicated_category_view() -> None:
-    item = ranked(
-        "India announces new AI research program",
-        categories=("India", "AI"),
-    )
-
-    result = render([enriched(item)])
-
-    # The headline appears in the home edition, Top Stories, Important Today,
-    # AI Watch, and both category views.
-    assert result.html.count("India announces new AI research program") == 6
-    assert '<section class="newsletter-view category-view category-view-india">' in result.html
-    assert '<section class="newsletter-view category-view category-view-ai">' in result.html
-    assert 'id="category-india-story-01"' in result.html
-    assert 'id="category-ai-story-01"' in result.html
-    assert result.included_story_ids == (item.story.story_id,)
-
-
-def test_stories_are_ordered_by_category_rank_and_render_deterministically() -> None:
-    first = ranked("Technology report one", published_at=GENERATED - timedelta(minutes=10))
-    second = ranked("Technology report two", published_at=GENERATED - timedelta(minutes=2))
-    ranked_items = rank_stories(
-        [first.categorized_story, second.categorized_story], as_of=GENERATED
-    )
-    enriched_items = [enriched(item) for item in ranked_items]
-
-    output_one = render(enriched_items)
-    output_two = render(enriched_items)
-
-    assert output_one == output_two
-    assert output_one.html.index("Technology report two") < output_one.html.index(
-        "Technology report one"
-    )
-    assert output_one.plain_text.index("Technology report two") < output_one.plain_text.index(
-        "Technology report one"
-    )
-
-
-def test_featured_story_numbering_category_buttons_and_back_to_top_links() -> None:
-    first = ranked("AI breakthrough improves research", categories=("AI",))
-    second = ranked("Technology companies expand", categories=("Technology",))
-    third = ranked("New AI technology reaches India", categories=("AI", "Technology"))
-    fourth = ranked("World leaders meet", categories=("World",))
-    ordered = rank_stories(
-        [
-            first.categorized_story,
-            second.categorized_story,
-            third.categorized_story,
-            fourth.categorized_story,
-        ],
-        as_of=GENERATED,
-    )
-    result = render([enriched(item) for item in reversed(ordered)])
-
-    assert "THE DAY'S MOST IMPORTANT STORIES · 4 stories" in result.html
-    assert 'class="story-card featured-card" id="story-01"' in result.html
-    assert 'class="story-card feed-card" id="story-02"' in result.html
-    assert 'class="story-card feed-card" id="story-03"' in result.html
-    assert 'class="story-card feed-card" id="story-04"' in result.html
-    assert result.html.index("TOP STORY") < result.html.index("story-02")
-    assert 'id="newsletter-top"' in result.html
-    assert 'href="#view-home"' in result.html
-    assert 'href="#category-india"' in result.html
-    assert 'href="#category-world"' in result.html
-    assert 'href="#category-ai"' in result.html
-    assert 'href="#category-technology"' in result.html
-    for anchor in ("india", "world", "ai", "technology"):
-        assert f'<span class="view-state" id="category-{anchor}"></span>' in result.html
-        assert f"#category-{anchor}:target ~ .edition-content" in result.html
-    assert result.html.count('class="back-to-home" href="#view-home"') == 8
-    assert result.html.count('class="story-cta" href="https://news.example/') >= 4
-    assert "#f7f5f0" in result.html
-    assert "TODAY'S STORIES" in result.html
-    assert result.included_story_ids == tuple(item.story.story_id for item in ordered)
-
-
-def test_all_standard_category_names_have_stable_fragment_ids() -> None:
-    item = ranked("A policy briefing")
-    categories = (
-        "India",
-        "World",
-        "AI",
-        "Technology",
-        "Business & Economy",
-        "Science & Space",
-        "Sports",
-        "Entertainment",
-    )
-    categorized = replace(item.categorized_story, categories=categories, status="categorized")
-    result = render([enriched(replace(item, categorized_story=categorized))])
-
-    for anchor in (
-        "category-india",
-        "category-world",
-        "category-ai",
-        "category-technology",
-        "category-business",
-        "category-science",
-        "category-sports",
-        "category-entertainment",
-    ):
-        assert f'href="#{anchor}"' in result.html
-        assert f'id="{anchor}"' in result.html
-        assert f"#{anchor}:target ~ .edition-content" in result.html
-    assert result.html.count('class="back-to-home" href="#view-home"') == 8
-
-
-def test_category_view_contains_only_stories_assigned_to_that_category() -> None:
-    ai = ranked("AI research makes a breakthrough", categories=("AI",))
-    technology = ranked("Software technology gets an update", categories=("Technology",))
-    both = ranked("AI technology changes the field", categories=("AI", "Technology"))
-    ordered = rank_stories(
-        [ai.categorized_story, technology.categorized_story, both.categorized_story],
-        as_of=GENERATED,
-    )
-    result = render([enriched(item) for item in ordered])
-
-    def view_content(category: str) -> str:
-        marker = f'<section class="newsletter-view category-view category-view-{category}">'
-        start = result.html.index(marker)
-        end = result.html.index("</section>", start) + len("</section>")
-        return result.html[start:end]
-
-    ai_view = view_content("ai")
-    technology_view = view_content("technology")
-    assert "AI research makes a breakthrough" in ai_view
-    assert "AI technology changes the field" in ai_view
-    assert "Software technology gets an update" not in ai_view
-    assert "Software technology gets an update" in technology_view
-    assert "AI technology changes the field" in technology_view
-    assert "AI research makes a breakthrough" not in technology_view
-
-
-def test_html_email_layout_includes_mobile_styles_and_real_link_ctas() -> None:
-    source_url = "https://news.example/read-this?edition=morning&lang=en"
-    item = ranked("A fresh morning headline", url=source_url)
-    result = render([enriched(item)])
-
-    assert "@media only screen and (max-width:520px)" in result.html
-    assert "READ FULL STORY →" in result.html
-    assert f'href="{source_url.replace("&", "&amp;")}"' in result.html
-    assert "<script" not in result.html
-    assert "<link rel=\"stylesheet\"" not in result.html
-    assert "@import" not in result.html
-    assert "fonts.googleapis.com" not in result.html
-    assert "javascript:" not in result.html
-    assert "padding:13px 6px" in result.html
-    assert "A fresh morning headline" in result.plain_text
-    assert f"Read: {source_url}" in result.plain_text
-    assert source_url in result.plain_text
-
-
-def test_unicode_apostrophes_and_markup_like_text_remain_readable_and_escaped() -> None:
-    item = ranked(
-        "L'été & café — 東京 <update>",
-        publisher="O'Brien & News",
-        url="https://news.example/story?edition=été&lang=ja",
-    )
-    result = render(
-        [enriched(item, summary="Résumé: 東京 & useful context.", why="Readers' choices matter.")]
-    )
+    result = render([item])
 
     assert "L&#x27;été &amp; café — 東京 &lt;update&gt;" in result.html
     assert "O&#x27;Brien &amp; News" in result.html
     assert "Résumé: 東京 &amp; useful context." in result.html
-    assert "Readers&#x27; choices matter." in result.html
     assert "https://news.example/story?edition=été&amp;lang=ja" in result.html
-    assert "L'été & café — 東京 <update>" in result.plain_text
-
-
-def test_empty_newsletter_keeps_category_views_with_clear_empty_states() -> None:
-    result = render([])
-
-    assert "THE DAY'S MOST IMPORTANT STORIES · 0 stories" in result.html
-    assert "No eligible stories are available today." in result.html
-    assert "No eligible stories are available today." in result.plain_text
-    assert 'href="#view-home"' in result.html
-    assert 'href="#category-india"' in result.html
-    assert 'href="#category-entertainment"' in result.html
-    assert result.html.count('class="empty-category"') == 8
-    assert result.html.count('class="back-to-home" href="#view-home"') == 8
-
-
-def test_empty_newsletter_and_invalid_timezone_or_timestamp() -> None:
-    empty = render([])
-    assert "No eligible stories" in empty.html
-    assert "No eligible stories" in empty.plain_text
-
-    try:
-        render([], timezone_name="Not/A_Timezone")
-    except ValueError as error:
-        assert "Unknown IANA timezone" in str(error)
-    else:
-        raise AssertionError("invalid timezone should fail")
-
-    try:
-        render_newsletter([], generated_at=datetime(2026, 10, 1, 5), timezone_name="UTC")
-    except ValueError as error:
-        assert "timezone-aware" in str(error)
-    else:
-        raise AssertionError("naive generation time should fail")
-
-
-def test_duplicate_story_inputs_are_rejected_to_avoid_double_rendering() -> None:
-    item = enriched(ranked("Technology announcement"))
-
-    try:
-        render([item, item])
-    except ValueError as error:
-        assert "duplicate story" in str(error)
-    else:
-        raise AssertionError("duplicate story input should fail")

@@ -6,119 +6,60 @@
     <meta name="color-scheme" content="light">
     <title>$title</title>
     <style>
-      body { margin:0; padding:0; background:#f7f5f0; color:#111111; font-family:Arial,Helvetica,sans-serif; }
-      a { color:#b3261e; }
-      a:hover { color:#7f1d18; }
-      .page { width:100%; background:#f7f5f0; }
-      .container { width:100%; max-width:700px; margin:0 auto; background:#fffefa; }
-      .masthead { padding:29px 31px 23px; background:#fffefa; border-bottom:1px solid #111111; }
-      .masthead-grid { width:100%; border-collapse:collapse; }
-      .brand { margin:0; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:31px; font-weight:bold; letter-spacing:-.7px; }
-      .date { color:#5f5f5f; font-size:10px; font-weight:bold; letter-spacing:1px; text-align:right; }
-      .masthead-subtitle { margin:10px 0 0; color:#5f5f5f; font-size:10px; font-weight:bold; letter-spacing:1.6px; }
-      .edition { background:#fffefa; }
-      .view-state { display:block; height:0; max-height:0; overflow:hidden; line-height:0; font-size:0; }
-      .edition-nav { padding:7px 23px 0; background:#fffefa; border-bottom:1px solid #d7d3cc; }
-      .nav-link { display:inline-block; margin:0 9px 0 0; padding:13px 7px 12px; border-bottom:2px solid transparent; color:#333333!important; font-size:10px; font-weight:bold; letter-spacing:.65px; line-height:16px; text-decoration:none; }
-      .nav-link:hover { color:#b3261e!important; border-bottom-color:#b3261e; }
-      .today-link { color:#b3261e!important; }
-      .edition-content { padding:24px 31px 29px; background:#fffefa; }
-      .home-view { display:block; }
-      .category-view { display:none; }
-      $view_rules
-      .section-label,.view-kicker { margin:0 0 17px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:1.7px; }
-      .featured-card { margin:0 0 25px; padding:22px 0 24px; background:#fffefa; border-top:2px solid #b3261e; border-bottom:1px solid #d7d3cc; }
-      .feed-card { margin:0; padding:20px 0; background:transparent; border-bottom:1px solid #d7d3cc; }
-      .story-layout { width:100%; border-collapse:collapse; }
-      .story-number { width:55px; padding:1px 17px 0 0; color:#9a968f; font-family:Georgia,'Times New Roman',serif; font-size:27px; font-weight:bold; vertical-align:top; }
-      .featured-card .story-number { color:#b3261e; font-size:34px; }
-      .story-kicker { margin:0 0 8px; line-height:1.8; }
-      .top-story { display:inline-block; margin:0 8px 3px 0; color:#b3261e; font-size:9px; font-weight:bold; letter-spacing:1.4px; }
-      .category-badge { display:inline-block; margin:0 7px 3px 0; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.6px; }
-      .featured-card .category-badge { color:#b3261e; }
-      .story-title { margin:0 0 9px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:22px; line-height:1.25; letter-spacing:-.2px; }
-      .featured-card .story-title { max-width:590px; font-size:31px; line-height:1.14; letter-spacing:-.45px; }
-      .metadata { margin:0 0 13px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.75px; line-height:1.5; text-transform:uppercase; }
-      .summary-label { margin:0 0 5px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:.7px; }
-      .summary { max-width:590px; margin:0 0 12px; color:#333333; font-size:14px; line-height:1.65; }
-      .why { max-width:590px; margin:13px 0; padding-left:11px; border-left:2px solid #b3261e; }
-      .why-label { margin:0 0 4px; color:#b3261e; font-size:9px; font-weight:bold; letter-spacing:1px; }
-      .why p:last-child { margin:0; color:#5f5f5f; font-size:12px; line-height:1.55; }
-      .story-cta { display:inline-block; margin:5px 0 0; padding:10px 0; border-bottom:1px solid #b3261e; color:#b3261e!important; font-size:10px; font-weight:bold; letter-spacing:.8px; text-decoration:none; }
-      .story-cta:hover { color:#7f1d18!important; border-bottom-width:2px; }
-      .additional-sources { margin:8px 0 0; font-size:10px; line-height:1.6; }
-      .source-link { margin-right:12px; color:#5f5f5f; }
-      .empty-state,.empty-category { margin:0; padding:18px 0; border-top:1px solid #d7d3cc; border-bottom:1px solid #d7d3cc; color:#5f5f5f; font-size:14px; line-height:1.6; }
-      .category-title { margin:0 0 12px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:34px; line-height:1.1; }
-      .view-subtitle { margin:0 0 22px; color:#5f5f5f; font-size:9px; font-weight:bold; letter-spacing:1.5px; }
-      .back-row { margin:21px 0 0; padding:0; border-top:1px solid #d7d3cc; }
-      .back-to-home { display:inline-block; padding:13px 0; color:#5f5f5f!important; font-size:10px; font-weight:bold; letter-spacing:.8px; text-decoration:none; }
-      .back-to-home:hover { color:#b3261e!important; }
-      .newspaper-addon { margin:0 0 20px; padding:16px 0; border-top:2px solid #b3261e; border-bottom:1px solid #d7d3cc; }
-      .addon-label { margin:0 0 5px; color:#b3261e; font-family:Georgia,'Times New Roman',serif; font-size:19px; font-weight:bold; }
-      .addon-subtitle { margin:0 0 13px; color:#5f5f5f; font-size:11px; line-height:1.5; }
-      .addon-story { margin:0 0 12px; padding:0 0 10px; border-bottom:1px solid #ece8e1; }
-      .addon-story:last-child { margin-bottom:0; padding-bottom:0; border-bottom:0; }
-      .addon-story h3 { margin:0 0 5px; font-family:Georgia,'Times New Roman',serif; font-size:16px; line-height:1.3; }
-      .addon-story h3 a { color:#111111!important; text-decoration:none; }
-      .addon-story p { margin:4px 0; color:#333333; font-size:12px; line-height:1.55; }
-      .addon-number,.addon-source { color:#666666!important; font-size:9px!important; }
-      .addon-why { border-left:2px solid #b3261e; padding-left:8px; }
-      .addon-source a { color:#b3261e!important; }
-      .footer { padding:18px 31px 23px; border-top:1px solid #d7d3cc; color:#5f5f5f; font-size:10px; line-height:1.6; }
-      .footer-brand { margin:0 0 5px; color:#111111; font-family:Georgia,'Times New Roman',serif; font-size:13px; font-weight:bold; }
+      body { margin:0; padding:0; background:#f7f6f2; color:#171717; font-family:Arial,Helvetica,sans-serif; }
+      a { color:#9e2924; }
+      .page { width:100%; background:#f7f6f2; }
+      .container { width:100%; max-width:620px; margin:0 auto; background:#fffefa; }
+      .content { padding:28px 30px 22px; }
+      .masthead { padding-bottom:18px; border-bottom:1px solid #dedbd5; }
+      .brand { margin:0 0 5px; font-size:12px; font-weight:bold; letter-spacing:1.6px; }
+      .edition { margin:0; color:#77736d; font-size:12px; }
+      .section-heading { margin:24px 0 4px; color:#77736d; font-size:10px; font-weight:bold; letter-spacing:1.4px; }
+      .story { padding:14px 0; border-bottom:1px solid #e7e3dc; }
+      .story h3 { margin:3px 0 6px; font-family:Georgia,'Times New Roman',serif; font-size:19px; line-height:1.3; }
+      .story h3 a { color:#171717; text-decoration:none; }
+      .category { margin:0; color:#9e2924; font-size:9px; font-weight:bold; letter-spacing:1.2px; }
+      .summary { margin:0 0 7px; color:#383838; font-size:13px; line-height:1.5; }
+      .metadata { margin:0 0 5px; color:#77736d; font-size:10px; line-height:1.4; }
+      .read-more { display:inline-block; padding:5px 0; color:#9e2924; font-size:10px; font-weight:bold; letter-spacing:.7px; text-decoration:none; }
+      .category-section { margin-top:20px; }
+      .category-section .section-heading { margin-top:0; padding-top:14px; border-top:1px solid #dedbd5; color:#171717; font-family:Georgia,'Times New Roman',serif; font-size:17px; letter-spacing:0; }
+      .compact h3 { font-size:15px; }
+      .compact .summary { margin-bottom:5px; font-size:12px; }
+      .compact .story { padding:10px 0; }
+      .addon { margin-top:22px; padding-top:14px; border-top:1px solid #dedbd5; }
+      .addon ul { margin:8px 0 0; padding-left:17px; }
+      .addon li { padding:3px 0; color:#383838; font-size:12px; line-height:1.45; }
+      .addon li a { color:#383838; text-decoration:none; }
+      .footer { margin-top:24px; padding-top:14px; border-top:1px solid #dedbd5; color:#8a867f; font-size:10px; line-height:1.5; }
       @media only screen and (max-width:520px) {
-        .masthead { padding:23px 18px 18px; }
-        .brand { font-size:28px; }
-        .date { font-size:9px; }
-        .edition-nav { padding:5px 13px 0; }
-        .nav-link { margin-right:4px; padding:13px 6px 11px; }
-        .edition-content { padding:20px 17px 24px; }
-        .story-number { width:41px; padding-right:10px; font-size:23px; }
-        .featured-card .story-number { font-size:29px; }
-        .story-title { font-size:20px; }
-        .featured-card .story-title { font-size:27px; }
-        .summary { font-size:14px; }
-        .featured-card { padding-top:18px; }
-        .footer { padding-right:18px; padding-left:18px; }
+        .content { padding:22px 17px 18px; }
+        .story h3 { font-size:18px; }
+        .compact h3 { font-size:15px; }
+        .summary { font-size:13px; }
       }
     </style>
   </head>
-  <body style="margin:0;background:#f7f5f0;color:#111111;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" class="page" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f7f5f0;">
-      <tbody><tr><td align="center">
-        <table role="presentation" class="container" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:700px;background:#fffefa;">
-          <tbody>
-            <tr><td class="masthead" id="newsletter-top" style="padding:29px 31px 23px;background:#fffefa;border-bottom:1px solid #111111;">
-              <table role="presentation" class="masthead-grid"><tbody><tr>
-                <td><p class="brand">DAILY NEWS</p></td>
-                <td class="date">$local_date</td>
-              </tr></tbody></table>
-              <p class="masthead-subtitle">THE DAY'S MOST IMPORTANT STORIES · $count $story_word</p>
-            </td></tr>
-            <tr><td>
-              <div class="edition">
-                $view_states
-                <nav class="edition-nav" aria-label="Home and category views">$navigation</nav>
-                <main class="edition-content">
-                  <div class="newsletter-view home-view">
-                    <p class="section-label">TODAY'S STORIES</p>
-                    $addons
-                    $featured
-                    $empty_notice
-                    $feed
-                  </div>
-                  $categories
-                </main>
-              </div>
-            </td></tr>
-            <tr><td class="footer">
-              <p class="footer-brand">DAILY NEWS</p>
-              <p style="margin:0 0 5px;">Your personal daily intelligence briefing.</p>
-              <p style="margin:0 0 5px;"><time datetime="$generated_iso">Generated $generated_at</time></p>
-              <p style="margin:0;">Follow the source links for original reporting.</p>
-            </td></tr>
-          </tbody>
+  <body style="margin:0;padding:0;background:#f7f6f2;color:#171717;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f7f6f2;">
+      <tbody><tr><td align="center" style="padding:0 8px;">
+        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:620px;background:#fffefa;">
+          <tbody><tr><td class="content" style="padding:28px 30px 22px;">
+            <header class="masthead" style="padding-bottom:18px;border-bottom:1px solid #dedbd5;">
+              <p class="brand" style="margin:0 0 5px;font-size:12px;font-weight:bold;letter-spacing:1.6px;">PERSONAL NEWS</p>
+              <p class="edition" style="margin:0;color:#77736d;font-size:12px;">Daily Brief · $local_date</p>
+            </header>
+            $empty_notice
+            <main>
+              <h1 class="section-heading" style="margin:24px 0 4px;color:#77736d;font-size:10px;font-weight:bold;letter-spacing:1.4px;">⭐ TOP 5</h1>
+              $top_stories
+              $categories
+              $addons
+            </main>
+            <footer class="footer" style="margin-top:24px;padding-top:14px;border-top:1px solid #dedbd5;color:#8a867f;font-size:10px;line-height:1.5;">
+              Follow the links for complete reporting from the original sources.
+            </footer>
+          </td></tr></tbody>
         </table>
       </td></tr></tbody>
     </table>
