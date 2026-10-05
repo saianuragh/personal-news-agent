@@ -4,8 +4,13 @@ on:
   # GitHub Actions schedules use UTC: 01:30 UTC is 07:00 Asia/Kolkata.
   schedule:
     - cron: "30 1 * * *"
-  # Runs the same production path as schedule and can send a real newsletter.
+  # Manual dispatch with optional send toggle. Default false means config-check only.
   workflow_dispatch:
+    inputs:
+      send:
+        description: "Send the newsletter (false = config-check only, true = send)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -56,5 +61,42 @@ jobs:
       - name: Validate non-interactive send configuration
         run: personal-news-agent config-check
 
+      - name: Decide whether to send
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "send=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.send }}" == "true" ]]; then
+              echo "send=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "send=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "send=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run the production newsletter pipeline
-        run: personal-news-agent send
+        id: send
+        if: steps.decide.outputs.send == 'true'
+        run: |
+          rc=0
+          personal-news-agent send > "$RUNNER_TEMP/send.json" || rc=$?
+          cat "$RUNNER_TEMP/send.json"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Print safe summary
+        if: always() && steps.decide.outputs.send == 'true'
+        run: |
+          python - <<'PY'
+          import json, os
+          path = os.path.join(os.environ["RUNNER_TEMP"], "send.json")
+          try:
+              data = json.loads(open(path).read().strip().splitlines()[-1])
+              status = data.get("status", "unknown")
+              ok = bool((data.get("delivery") or {}).get("success"))
+          except Exception:
+              status, ok = "unreadable", False
+          print(f"Status: {status}. SMTP accepted = {'yes' if ok else 'no'}. Inbox delivery = not verified.")
+          PY
