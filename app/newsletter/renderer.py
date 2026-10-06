@@ -28,6 +28,8 @@ SECTION_ORDER = (
     "Entertainment",
     "Unclassified",
 )
+
+
 @dataclass(frozen=True, slots=True)
 class NewsletterDocument:
     """Rendered alternatives and the story IDs included in the artifact."""
@@ -68,8 +70,8 @@ def render_newsletter(
 
     Failed enrichment results, stories without usable summaries, and
     unclassified/ineligible ranked stories are omitted, matching the approved
-    architecture's fallback-or-omit policy. Stories in multiple categories
-    appear once in the Home view and in every applicable category view.
+    architecture's fallback-or-omit policy. Each story appears at most once
+    in the newsletter, in both HTML and plain text.
     """
     zone = _load_timezone(timezone_name)
     if generated_at.tzinfo is None or generated_at.utcoffset() is None:
@@ -141,23 +143,32 @@ def render_newsletter(
             sources=sources,
         )
 
-    category_groups: dict[str, list[_StoryDisplay]] = defaultdict(list)
-    for enriched in accepted:
-        display = display_by_id[enriched.ranked_story.story.story_id]
-        for category in enriched.ranked_story.categories:
-            category_groups[category].append(display)
-
     local_date = generated_at.astimezone(zone).strftime("%d %B %Y")
     displays = [display_by_id[item.ranked_story.story.story_id] for item in accepted]
-    html_categories = "\n".join(
-        _render_html_category(
-            category,
-            category_groups[category][:3],
-        )
-        for category in SECTION_ORDER[:-1]
-        if category_groups[category]
-    )
-    addon_html, addon_text = _render_addons(displays, generated_at)
+    
+    # Track shown stories to ensure each appears at most once
+    shown_ids: set[UUID] = set()
+    
+    # Top 5 stories
+    top_five = displays[:5]
+    for display in top_five:
+        shown_ids.add(display.story_id)
+    
+    # Build category sections with duplicate prevention
+    html_categories_list: list[str] = []
+    for category in SECTION_ORDER[:-1]:
+        category_stories: list[_StoryDisplay] = []
+        for display in displays:
+            if display.story_id not in shown_ids and category in display.categories:
+                category_stories.append(display)
+                shown_ids.add(display.story_id)
+                if len(category_stories) >= 3:
+                    break
+        if category_stories:
+            html_categories_list.append(_render_html_category(category, category_stories))
+    
+    html_categories = "\n".join(html_categories_list)
+    
     template_source = (
         template_path.read_text(encoding="utf-8")
         if not isinstance(template_path, str)
@@ -174,26 +185,53 @@ def render_newsletter(
             if not displays
             else ""
         ),
-        addons=addon_html,
+        addons="",
         top_stories="\n".join(
             _render_html_story(item, featured=index == 1)
-            for index, item in enumerate(displays[:5], 1)
+            for index, item in enumerate(top_five, 1)
         ),
         categories=html_categories,
     )
 
-    text_sections = [_render_text_story(display) for display in displays[:5]]
-    category_indexes = [
-        _render_text_category(category, category_groups[category])
-        for category in SECTION_ORDER[:-1]
-        if category_groups[category]
-    ]
+    # Plain text version with same deduplication
+    shown_ids_text: set[UUID] = set()
+    text_sections = []
+    for display in top_five:
+        text_sections.append(_render_text_story(display))
+        shown_ids_text.add(display.story_id)
+    
+    category_indexes: list[str] = []
+    for category in SECTION_ORDER[:-1]:
+        category_stories: list[_StoryDisplay] = []
+        for display in displays:
+            if display.story_id not in shown_ids_text and category in display.categories:
+                category_stories.append(display)
+                shown_ids_text.add(display.story_id)
+                if len(category_stories) >= 3:
+                    break
+        if category_stories:
+            category_indexes.append(_render_text_category(category, category_stories))
+    
     category_indexes.extend(
-        _render_text_category(category, category_groups[category])
+        _render_text_category(category, [d for d in displays if d.story_id not in shown_ids_text and category in d.categories][:3])
         for category in sorted(
-            set(category_groups) - set(SECTION_ORDER[:-1]), key=str.casefold
+            set(category_groups := defaultdict(list)) - set(SECTION_ORDER[:-1]), key=str.casefold
         )
+        if (category_groups := {cat: [d for d in displays if d.story_id not in shown_ids_text and cat in d.categories] for cat in set().union(*[set(d.categories) for d in displays]) - set(SECTION_ORDER[:-1])}).get(category)
     )
+    
+    # Simpler approach for remaining categories
+    remaining_categories = sorted(
+        set().union(*[set(d.categories) for d in displays if d.story_id not in shown_ids_text]) - set(SECTION_ORDER[:-1]),
+        key=str.casefold
+    )
+    for category in remaining_categories:
+        category_stories = [d for d in displays if d.story_id not in shown_ids_text and category in d.categories][:3]
+        if category_stories:
+            for display in category_stories:
+                shown_ids_text.add(display.story_id)
+            category_indexes.append(_render_text_category(category, category_stories))
+    
     plain_text = "\n\n".join(
         (
             "PERSONAL NEWS",
@@ -201,7 +239,6 @@ def render_newsletter(
             "TOP 5",
             *(text_sections or ["No eligible stories are available today. Check back soon."]),
             *category_indexes,
-            *addon_text,
         )
     )
     return NewsletterDocument(
@@ -224,104 +261,6 @@ def _compact_summary(value: str, maximum: int = SUMMARY_LIMIT) -> str:
     if " " in excerpt:
         excerpt = excerpt.rsplit(" ", 1)[0]
     return f"{excerpt.rstrip(' ,;:.-')}…"
-
-
-def _render_addons(
-    stories: list[_StoryDisplay], generated_at: datetime
-) -> tuple[str, list[str]]:
-    """Render compact, source-linked editorial extras from existing selected stories."""
-    blocks: list[str] = []
-    text_blocks: list[str] = []
-
-    recent: list[_StoryDisplay] = []
-    cutoff = generated_at.timestamp() - 24 * 60 * 60
-    for story in stories:
-        published = story.sources[0].published_iso
-        if published:
-            try:
-                if datetime.fromisoformat(published).timestamp() >= cutoff:
-                    recent.append(story)
-            except ValueError:
-                continue
-        if len(recent) == 3:
-            break
-    if recent:
-        links = "".join(
-            '<li style="padding:3px 0;color:#383838;font-size:12px;line-height:1.45">'
-            f'<a style="color:#383838;text-decoration:none" '
-            f'href="{escape(story.sources[0].url, quote=True)}">'
-            f'{escape(story.headline)} — {escape(story.sources[0].publisher)}</a></li>'
-            for story in recent
-        )
-        blocks.append(_addon_section("⚡ IMPORTANT TODAY", f"<ul>{links}</ul>"))
-        text_blocks.append(
-            "IMPORTANT TODAY\n"
-            + "\n".join(
-                f"• {story.headline} — {story.sources[0].publisher}: {story.sources[0].url}"
-                for story in recent
-            )
-        )
-
-    ai_stories = [story for story in stories if "AI" in story.categories][:3]
-    if ai_stories:
-        blocks.append(
-            _addon_section(
-                "🤖 AI WATCH",
-                "".join(
-                    _render_html_story(story, featured=False, compact=True)
-                    for story in ai_stories
-                ),
-            )
-        )
-        text_blocks.append(
-            "AI WATCH\n"
-            + "\n\n".join(_render_text_story(story) for story in ai_stories)
-        )
-
-    fact_story = next(
-        (
-            story
-            for story in stories
-            if story.sources[0].description and story.sources[0].description.strip()
-        ),
-        None,
-    )
-    if fact_story is not None:
-        source = fact_story.sources[0]
-        fact = _compact_summary(_first_sentence(source.description or ""), 200)
-        if fact:
-            blocks.append(
-                _addon_section(
-                    "🧠 FACT OF THE DAY",
-                    '<p style="margin:0 0 7px;color:#383838;font-size:13px;line-height:1.5">'
-                    f'{escape(fact)}</p><p class="metadata" style="margin:0;color:#77736d;'
-                    'font-size:10px;line-height:1.4">Source-reported · '
-                    f'{escape(source.publisher)} · '
-                    f'<a href="{escape(source.url, quote=True)}">Read</a></p>',
-                )
-            )
-            text_blocks.append(
-                f"FACT OF THE DAY\n{fact}\nSource: {source.publisher} · {source.url}"
-            )
-
-    return "\n".join(blocks), text_blocks
-
-
-def _addon_section(label: str, content: str) -> str:
-    return (
-        '<div class="addon" style="margin-top:22px;padding-top:14px;'
-        'border-top:1px solid #dedbd5"><h2 class="section-heading" '
-        'style="margin:0 0 4px;color:#77736d;font-size:10px;font-weight:bold;'
-        'letter-spacing:1.4px">'
-        f'{escape(label)}</h2>{content}</div>'
-    )
-
-
-def _first_sentence(text: str) -> str:
-    """Keep a source-provided fact excerpt brief without generating new claims."""
-    cleaned = " ".join(text.split())
-    sentence_end = next((index for index, char in enumerate(cleaned) if char in ".!?"), -1)
-    return cleaned[: sentence_end + 1] if sentence_end >= 0 else cleaned
 
 
 def _render_html_story(
