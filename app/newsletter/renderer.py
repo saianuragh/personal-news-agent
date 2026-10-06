@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -145,30 +144,8 @@ def render_newsletter(
 
     local_date = generated_at.astimezone(zone).strftime("%d %B %Y")
     displays = [display_by_id[item.ranked_story.story.story_id] for item in accepted]
-    
-    # Track shown stories to ensure each appears at most once
-    shown_ids: set[UUID] = set()
-    
-    # Top 5 stories
     top_five = displays[:5]
-    for display in top_five:
-        shown_ids.add(display.story_id)
-    
-    # Build category sections with duplicate prevention
-    html_categories_list: list[str] = []
-    for category in SECTION_ORDER[:-1]:
-        category_stories: list[_StoryDisplay] = []
-        for display in displays:
-            if display.story_id not in shown_ids and category in display.categories:
-                category_stories.append(display)
-                shown_ids.add(display.story_id)
-                if len(category_stories) >= 3:
-                    break
-        if category_stories:
-            html_categories_list.append(_render_html_category(category, category_stories))
-    
-    html_categories = "\n".join(html_categories_list)
-    
+    sections = _build_sections(displays, top_five)
     template_source = (
         template_path.read_text(encoding="utf-8")
         if not isinstance(template_path, str)
@@ -190,48 +167,15 @@ def render_newsletter(
             _render_html_story(item, featured=index == 1)
             for index, item in enumerate(top_five, 1)
         ),
-        categories=html_categories,
+        categories="\n".join(
+            _render_html_category(category, members) for category, members in sections
+        ),
     )
 
-    # Plain text version with same deduplication
-    shown_ids_text: set[UUID] = set()
-    text_sections = []
-    for display in top_five:
-        text_sections.append(_render_text_story(display))
-        shown_ids_text.add(display.story_id)
-    
-    category_indexes: list[str] = []
-    for category in SECTION_ORDER[:-1]:
-        category_stories: list[_StoryDisplay] = []
-        for display in displays:
-            if display.story_id not in shown_ids_text and category in display.categories:
-                category_stories.append(display)
-                shown_ids_text.add(display.story_id)
-                if len(category_stories) >= 3:
-                    break
-        if category_stories:
-            category_indexes.append(_render_text_category(category, category_stories))
-    
-    category_indexes.extend(
-        _render_text_category(category, [d for d in displays if d.story_id not in shown_ids_text and category in d.categories][:3])
-        for category in sorted(
-            set(category_groups := defaultdict(list)) - set(SECTION_ORDER[:-1]), key=str.casefold
-        )
-        if (category_groups := {cat: [d for d in displays if d.story_id not in shown_ids_text and cat in d.categories] for cat in set().union(*[set(d.categories) for d in displays]) - set(SECTION_ORDER[:-1])}).get(category)
-    )
-    
-    # Simpler approach for remaining categories
-    remaining_categories = sorted(
-        set().union(*[set(d.categories) for d in displays if d.story_id not in shown_ids_text]) - set(SECTION_ORDER[:-1]),
-        key=str.casefold
-    )
-    for category in remaining_categories:
-        category_stories = [d for d in displays if d.story_id not in shown_ids_text and category in d.categories][:3]
-        if category_stories:
-            for display in category_stories:
-                shown_ids_text.add(display.story_id)
-            category_indexes.append(_render_text_category(category, category_stories))
-    
+    text_sections = [_render_text_story(display) for display in top_five]
+    category_indexes = [
+        _render_text_category(category, members) for category, members in sections
+    ]
     plain_text = "\n\n".join(
         (
             "PERSONAL NEWS",
@@ -250,6 +194,33 @@ def render_newsletter(
 
 
 SUMMARY_LIMIT = 180
+
+
+MAX_PER_CATEGORY_SECTION = 3
+
+
+def _build_sections(
+    displays: Sequence[_StoryDisplay], top_five: Sequence[_StoryDisplay]
+) -> list[tuple[str, list[_StoryDisplay]]]:
+    """Group stories by category so every story appears at most once in the email.
+
+    Top 5 stories are never repeated. A multi-category story appears only in the
+    first category (in SECTION_ORDER) that picks it.
+    """
+    shown = {display.story_id for display in top_five}
+    sections: list[tuple[str, list[_StoryDisplay]]] = []
+    for category in SECTION_ORDER[:-1]:
+        picked: list[_StoryDisplay] = []
+        for display in displays:
+            if display.story_id in shown or category not in display.categories:
+                continue
+            picked.append(display)
+            shown.add(display.story_id)
+            if len(picked) >= MAX_PER_CATEGORY_SECTION:
+                break
+        if picked:
+            sections.append((category, picked))
+    return sections
 
 
 def _compact_summary(value: str, maximum: int = SUMMARY_LIMIT) -> str:
