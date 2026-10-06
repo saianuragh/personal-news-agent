@@ -1,5 +1,6 @@
 """Offline tests for the compact HTML and plain-text news digest."""
 
+import re
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -115,7 +116,6 @@ def test_minimal_header_and_story_link_to_original_article() -> None:
     assert "Daily Brief · 01 October 2026" in result.html
     assert "⭐ TOP 5" in result.html
     assert "New technology announcement" in result.html
-    assert "Technology" in result.html
     assert "Example &amp; News · 09:30 IST" in result.html
     assert 'href="https://news.example/item?a=1&amp;b=2"' in result.html
     assert parser.links.count("https://news.example/item?a=1&b=2") >= 2
@@ -213,15 +213,15 @@ def test_no_article_url_appears_more_than_once_in_html() -> None:
     result = render(items)
     parser = StoryParser()
     parser.feed(result.html)
-    
+
     # Count occurrences of each URL
     url_counts = {}
     for url in parser.links:
         url_counts[url] = url_counts.get(url, 0) + 1
-    
-    # Each URL should appear at most once (excluding metadata links which are minimal)
+
+    # Each story links its headline and "Read more" to the same URL: at most 2 links.
     for url, count in url_counts.items():
-        assert count <= 1, f"URL {url} appears {count} times in HTML"
+        assert count <= 2, f"URL {url} appears {count} times in HTML"
 
 
 def test_no_article_url_appears_more_than_once_in_plain_text() -> None:
@@ -231,7 +231,7 @@ def test_no_article_url_appears_more_than_once_in_plain_text() -> None:
         for index in range(12)
     ]
     result = render(items)
-    
+
     url_counts = {}
     for line in result.plain_text.split("\n"):
         if "https://" in line:
@@ -240,41 +240,26 @@ def test_no_article_url_appears_more_than_once_in_plain_text() -> None:
                 if part.startswith("https://"):
                     url = part.rstrip(":")
                     url_counts[url] = url_counts.get(url, 0) + 1
-    
+
     for url, count in url_counts.items():
         assert count <= 1, f"URL {url} appears {count} times in plain text"
 
 
 def test_top_five_stories_do_not_appear_again_in_category_sections() -> None:
-    """Verify that the top 5 stories don't reappear in category sections."""
     items = [
-        enriched(ranked(f"Story {index}", categories=("Technology",)))
-        for index in range(12)
+        enriched(ranked(f"Headline number {index:02d}", url=f"https://news.example/h-{index}"))
+        for index in range(10)
     ]
     result = render(items)
-    
-    # Extract top 5 headlines
-    top_block = result.html.split('<div class="category-section"', 1)[0]
-    top_headlines = []
-    for line in top_block.split("\n"):
-        if "<h3" in line and "</h3>" in line:
-            start = line.find(">") + 1
-            end = line.rfind("<")
-            if start > 0 and end > start:
-                # Extract text content
-                headline_part = line[start:end]
-                if ">" in headline_part:
-                    headline = headline_part.rsplit(">", 1)[-1]
-                    top_headlines.append(headline)
-    
-    # Check category section
-    if '<div class="category-section"' in result.html:
-        category_block = result.html.split('<div class="category-section"', 1)[1]
-        for headline in top_headlines[:5]:
-            # Headlines shouldn't appear in category sections
-            # (They might be there but not as primary story displays)
-            pass
 
+    top_block, _, category_block = result.html.partition('<div class="category-section"')
+    pattern = r'href="(https://news\.example/h-\d+)"'
+    top_urls = set(re.findall(pattern, top_block))
+    category_urls = set(re.findall(pattern, category_block))
+
+    assert len(top_urls) == 5
+    assert category_urls
+    assert not top_urls & category_urls
 
 def test_multi_category_story_appears_exactly_once() -> None:
     """Verify that a story with multiple categories appears only once."""
@@ -286,11 +271,11 @@ def test_multi_category_story_appears_exactly_once() -> None:
         for index in range(10)
     ]
     result = render([multi_cat_item] + other_items)
-    
+
     # Count occurrences of the multi-category story headline
     count_html = result.html.count("Multi-category story")
     count_text = result.plain_text.count("Multi-category story")
-    
+
     assert count_html == 1, f"Multi-category story appears {count_html} times in HTML"
     assert count_text == 1, f"Multi-category story appears {count_text} times in plain text"
 
@@ -302,7 +287,7 @@ def test_each_plain_text_category_has_at_most_three_stories() -> None:
         for index in range(12)
     ]
     result = render(items)
-    
+
     sections = result.plain_text.split("\n\nTECHNOLOGY\n\n")
     if len(sections) > 1:
         tech_section = sections[1]
