@@ -1,9 +1,7 @@
 name: Daily Newsletter
 
 on:
-     # GitHub Actions schedules use UTC: 01:37 UTC is 07:07 Asia/Kolkata.
-  schedule:
-     - cron: "37 1 * * *"
+  # Started at 07:00 IST by an external timer. GitHub's own schedule ran hours late.
   # Manual dispatch with optional send toggle. Default false means config-check only.
   workflow_dispatch:
     inputs:
