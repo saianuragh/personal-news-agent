@@ -11,7 +11,7 @@ def _load(name: str) -> dict:
 def test_cloud_workflow_schedules_ist_and_supports_manual_production_runs() -> None:
     workflow = _load("daily-newsletter.yml")
 
-    assert workflow["on"]["schedule"][0]["cron"] == "37 1 * * *"
+    assert "schedule" not in workflow["on"]
     assert "workflow_dispatch" in workflow["on"]
     job = workflow["jobs"]["send-newsletter"]
     assert "${{ secrets.SMTP_PASSWORD }}" == job["env"]["SMTP_PASSWORD"]
