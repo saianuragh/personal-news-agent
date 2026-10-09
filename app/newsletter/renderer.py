@@ -28,6 +28,13 @@ SECTION_ORDER = (
     "Unclassified",
 )
 
+INK = "#1a1a1a"
+PAPER_RULE = "#cfc6b2"
+MUTED = "#6e675b"
+ACCENT = "#7a1f1f"
+SERIF = "Georgia,'Times New Roman',Times,serif"
+IMAGE_FILTER = "filter:grayscale(1) contrast(1.05);"
+
 
 @dataclass(frozen=True, slots=True)
 class NewsletterDocument:
@@ -46,6 +53,7 @@ class _SourceDisplay:
     published: str | None
     published_iso: str | None
     description: str | None
+    image_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +139,7 @@ def render_newsletter(
                     article.published_at.isoformat() if article.published_at is not None else None
                 ),
                 description=article.description,
+                image_url=article.image_url,
             )
             for article in ordered_articles
         )
@@ -163,19 +172,14 @@ def render_newsletter(
             else ""
         ),
         addons="",
-        top_stories="\n".join(
-            _render_html_story(item, featured=index == 1)
-            for index, item in enumerate(top_five, 1)
-        ),
+        top_stories=_render_top_stories(top_five),
         categories="\n".join(
             _render_html_category(category, members) for category, members in sections
         ),
     )
 
     text_sections = [_render_text_story(display) for display in top_five]
-    category_indexes = [
-        _render_text_category(category, members) for category, members in sections
-    ]
+    category_indexes = [_render_text_category(category, members) for category, members in sections]
     plain_text = "\n\n".join(
         (
             "PERSONAL NEWS",
@@ -234,44 +238,136 @@ def _compact_summary(value: str, maximum: int = SUMMARY_LIMIT) -> str:
     return f"{excerpt.rstrip(' ,;:.-')}…"
 
 
+def _image_tag(display: _StoryDisplay, *, width: int) -> str:
+    """An <img> only when the feed supplied an image URL. Never a placeholder."""
+    image_url = display.sources[0].image_url
+    if not image_url:
+        return ""
+    return (
+        f'<img src="{escape(image_url, quote=True)}" width="{width}" '
+        f'alt="{escape(display.headline)}" border="0" '
+        f'style="display:block;width:100%;max-width:100%;height:auto;border:0;{IMAGE_FILTER}">'
+    )
+
+
+def _read_link(url: str, label: str) -> str:
+    return (
+        f'<a class="read-more" style="color:{ACCENT};font-family:{SERIF};font-size:12px;'
+        f'font-style:italic;text-decoration:underline" href="{url}">{label}</a>'
+    )
+
+
 def _render_html_story(
-    display: _StoryDisplay, *, featured: bool, compact: bool = False
+    display: _StoryDisplay,
+    *,
+    featured: bool,
+    compact: bool = False,
+    number: int | None = None,
+    show_image: bool = True,
+    rule_above: bool = False,
 ) -> str:
+    """One story. Lead = full width; default = column story; compact = category story."""
     source = display.sources[0]
     category = display.categories[0] if display.categories else "NEWS"
-    metadata = " · ".join(
-        value for value in (source.publisher, source.published) if value
+    url = escape(source.url, quote=True)
+    metadata = " · ".join(value for value in (source.publisher, source.published) if value)
+    headline = (
+        f'<a style="color:{INK};text-decoration:none" href="{url}">{escape(display.headline)}</a>'
     )
-    class_name = "story lead" if featured else "story compact" if compact else "story"
+    meta = (
+        f'<p class="metadata" style="margin:0 0 6px;color:{MUTED};font-family:{SERIF};'
+        f'font-size:11px;font-style:italic;line-height:1.4">{escape(metadata)}</p>'
+    )
+    kicker = (
+        f'<p class="category" style="margin:0 0 5px;color:{INK};font-family:{SERIF};'
+        f"font-size:10px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;"
+        f'border-bottom:1px solid {PAPER_RULE};padding-bottom:3px">{escape(category)}</p>'
+    )
+
+    if featured:
+        hero = _image_tag(display, width=560) if show_image else ""
+        figure = (
+            f'<div style="margin:0 0 4px">{hero}</div>'
+            f'<p style="margin:0 0 12px;color:{MUTED};font-family:{SERIF};font-size:10px;'
+            f'font-style:italic;text-align:right">Photo: {escape(source.publisher)}</p>'
+            if hero
+            else ""
+        )
+        return (
+            f'<div class="story lead" style="padding:18px 0 20px">{kicker}'
+            f'<h3 style="margin:0 0 12px;font-family:{SERIF};font-size:36px;line-height:1.08;'
+            f'font-weight:bold;letter-spacing:-0.5px">{headline}</h3>'
+            f"{figure}"
+            f'<p class="summary" style="margin:0 0 8px;color:#262626;font-family:{SERIF};'
+            f'font-size:15px;line-height:1.55;text-align:justify">{escape(display.summary)}</p>'
+            f"{meta}{_read_link(url, 'READ MORE →')}</div>"
+        )
+
+    image = _image_tag(display, width=266) if show_image else ""
+    figure = f'<div style="margin:0 0 8px">{image}</div>' if image else ""
+    head_size, summary_size = (17, 12) if compact else (21, 13)
+    top_rule = f"border-top:1px solid {PAPER_RULE};padding-top:12px;" if rule_above else ""
     return (
-        f'<div class="{class_name}" style="padding:15px 0;'
-        'border-bottom:1px solid #e7e3dc;">'
-        f'<p class="category" style="margin:0;color:#9e2924;font-size:9px;font-weight:bold;'
-        f'letter-spacing:1.2px">{escape(category.upper())}</p>'
-        f'<h3 style="margin:3px 0 6px;font-family:Georgia,\'Times New Roman\',serif;'
-        f'font-size:{15 if compact else 19}px;line-height:1.3">'
-        f'<a style="color:#171717;text-decoration:none" '
-        f'href="{escape(source.url, quote=True)}">{escape(display.headline)}</a></h3>'
-        f'<p class="summary" style="margin:0 0 7px;color:#383838;font-size:'
-        f'{12 if compact else 13}px;line-height:1.5">{escape(display.summary)}</p>'
-        f'<p class="metadata" style="margin:0 0 5px;color:#77736d;font-size:10px;'
-        f'line-height:1.4">{escape(metadata)}</p>'
-        f'<a class="read-more" style="display:inline-block;padding:5px 0;color:#9e2924;'
-        f'font-size:10px;font-weight:bold;letter-spacing:.7px;text-decoration:none" '
-        f'href="{escape(source.url, quote=True)}">'
-        f'{"→ READ" if compact else "READ MORE →"}</a></div>'
+        f'<div class="{"story compact" if compact else "story"}" '
+        f'style="{top_rule}padding-bottom:14px">'
+        f"{'' if compact else kicker}{figure}"
+        f'<h3 style="margin:0 0 6px;font-family:{SERIF};font-size:{head_size}px;'
+        f'line-height:1.18;font-weight:bold">{headline}</h3>'
+        f'<p class="summary" style="margin:0 0 6px;color:#262626;font-family:{SERIF};'
+        f'font-size:{summary_size}px;line-height:1.5;text-align:justify">'
+        f"{escape(display.summary)}</p>"
+        f"{meta}{_read_link(url, '→ READ' if compact else 'READ MORE →')}</div>"
     )
+
+
+def _columns(left: str, right: str) -> str:
+    """Two newspaper columns with a thin rule between them (stack on small screens)."""
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        'style="width:100%"><tr>'
+        f'<td class="col" width="50%" valign="top" style="width:50%;padding:0 14px 0 0">{left}</td>'
+        f'<td class="col col-right" width="50%" valign="top" style="width:50%;padding:0 0 0 14px;'
+        f'border-left:1px solid {INK}">{right}</td></tr></table>'
+    )
+
+
+def _render_top_stories(top: Sequence[_StoryDisplay]) -> str:
+    """Story 1 spans the page; stories 2-5 sit in two columns."""
+    if not top:
+        return ""
+    parts = [_render_html_story(top[0], featured=True, number=1)]
+    rest = list(top[1:])
+    for index in range(0, len(rest), 2):
+        pair = rest[index : index + 2]
+        left = _render_html_story(pair[0], featured=False, number=index + 2)
+        right = (
+            _render_html_story(pair[1], featured=False, number=index + 3) if len(pair) > 1 else ""
+        )
+        grid = _columns(left, right)
+        parts.append(f'<div style="border-top:1px solid {INK};padding-top:14px">{grid}</div>')
+    return "\n".join(parts)
 
 
 def _render_html_category(category: str, members: list[_StoryDisplay]) -> str:
-    stories = "".join(
-        _render_html_story(display, featured=False, compact=True) for display in members[:3]
-    )
+    """Section lead (with its photo) on the left; up to two shorter stories on the right."""
+    members = members[:3]
+    lead = _render_html_story(members[0], featured=False, compact=True)
+    if len(members) == 1:
+        body = f'<div style="padding-top:14px">{lead}</div>'
+    else:
+        others = "".join(
+            _render_html_story(
+                item, featured=False, compact=True, show_image=False, rule_above=i > 0
+            )
+            for i, item in enumerate(members[1:])
+        )
+        body = f'<div style="padding-top:14px">{_columns(lead, others)}</div>'
     return (
-        '<div class="category-section" style="margin-top:20px">'
-        f'<h2 class="section-heading" style="margin:0;padding:14px 0 4px;border-top:1px solid '
-        f'#dedbd5;color:#171717;font-family:Georgia,\'Times New Roman\',serif;font-size:17px">'
-        f'{escape(category)}</h2>{stories}</div>'
+        '<div class="category-section" style="margin-top:26px">'
+        f'<h2 class="section-heading" style="margin:0;padding:7px 0;border-top:4px double '
+        f"{INK};border-bottom:1px solid {INK};color:{INK};font-family:{SERIF};font-size:13px;"
+        f'font-weight:bold;letter-spacing:3px;text-align:center;text-transform:uppercase">'
+        f"{escape(category)}</h2>{body}</div>"
     )
 
 
