@@ -6,57 +6,32 @@
     <meta name="color-scheme" content="light">
     <title>$title</title>
     <style>
-      body { margin:0; padding:0; background:#f7f6f2; color:#171717; font-family:Arial,Helvetica,sans-serif; }
-      a { color:#9e2924; }
-      .page { width:100%; background:#f7f6f2; }
-      .container { width:100%; max-width:620px; margin:0 auto; background:#fffefa; }
-      .content { padding:28px 30px 22px; }
-      .masthead { padding-bottom:18px; border-bottom:1px solid #dedbd5; }
-      .brand { margin:0 0 5px; font-size:12px; font-weight:bold; letter-spacing:1.6px; }
-      .edition { margin:0; color:#77736d; font-size:12px; }
-      .section-heading { margin:24px 0 4px; color:#77736d; font-size:10px; font-weight:bold; letter-spacing:1.4px; }
-      .story { padding:14px 0; border-bottom:1px solid #e7e3dc; }
-      .story h3 { margin:3px 0 6px; font-family:Georgia,'Times New Roman',serif; font-size:19px; line-height:1.3; }
-      .story h3 a { color:#171717; text-decoration:none; }
-      .category { margin:0; color:#9e2924; font-size:9px; font-weight:bold; letter-spacing:1.2px; }
-      .summary { margin:0 0 7px; color:#383838; font-size:13px; line-height:1.5; }
-      .metadata { margin:0 0 5px; color:#77736d; font-size:10px; line-height:1.4; }
-      .read-more { display:inline-block; padding:5px 0; color:#9e2924; font-size:10px; font-weight:bold; letter-spacing:.7px; text-decoration:none; }
-      .category-section { margin-top:20px; }
-      .category-section .section-heading { margin-top:0; padding-top:14px; border-top:1px solid #dedbd5; color:#171717; font-family:Georgia,'Times New Roman',serif; font-size:17px; letter-spacing:0; }
-      .compact h3 { font-size:15px; }
-      .compact .summary { margin-bottom:5px; font-size:12px; }
-      .compact .story { padding:10px 0; }
-      .addon { margin-top:22px; padding-top:14px; border-top:1px solid #dedbd5; }
-      .addon ul { margin:8px 0 0; padding-left:17px; }
-      .addon li { padding:3px 0; color:#383838; font-size:12px; line-height:1.45; }
-      .addon li a { color:#383838; text-decoration:none; }
-      .footer { margin-top:24px; padding-top:14px; border-top:1px solid #dedbd5; color:#8a867f; font-size:10px; line-height:1.5; }
+      body { margin:0; padding:0; background:#d9d3c2; }
+      a { text-decoration:none; }
       @media only screen and (max-width:520px) {
-        .content { padding:22px 17px 18px; }
-        .story h3 { font-size:18px; }
-        .compact h3 { font-size:15px; }
-        .summary { font-size:13px; }
+        .content { padding:4px 16px 22px !important; }
+        .brand { font-size:36px !important; letter-spacing:1px !important; }
+        .story.lead h3 { font-size:28px !important; }
+        .col { display:block !important; width:100% !important; padding:0 !important; border-left:0 !important; }
+        .col-right { padding-top:6px !important; }
       }
     </style>
   </head>
-  <body style="margin:0;padding:0;background:#f7f6f2;color:#171717;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f7f6f2;">
-      <tbody><tr><td align="center" style="padding:0 8px;">
-        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:620px;background:#fffefa;">
-          <tbody><tr><td class="content" style="padding:28px 30px 22px;">
-            <div class="masthead" style="padding-bottom:18px;border-bottom:1px solid #dedbd5;">
-              <p class="brand" style="margin:0 0 5px;font-size:12px;font-weight:bold;letter-spacing:1.6px;">PERSONAL NEWS</p>
-              <p class="edition" style="margin:0;color:#77736d;font-size:12px;">Daily Brief · $local_date</p>
+  <body style="margin:0;padding:0;background:#d9d3c2;color:#1a1a1a;font-family:Georgia,'Times New Roman',Times,serif;">
+    <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#d9d3c2;">
+      <tbody><tr><td align="center" style="padding:14px 8px;">
+        <table role="presentation" class="container" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:620px;background:#f7f3e8;">
+          <tbody><tr><td class="content" style="padding:10px 30px 28px;">
+            <div class="masthead" style="margin-top:12px;padding:16px 0 12px;border-top:4px double #1a1a1a;text-align:center;">
+              <p class="brand" style="margin:0;color:#1a1a1a;font-family:Georgia,'Times New Roman',Times,serif;font-size:56px;font-weight:bold;line-height:1.02;letter-spacing:3px;">PERSONAL NEWS</p>
             </div>
+            <p class="edition" style="margin:0;padding:7px 0;border-top:1px solid #1a1a1a;border-bottom:4px double #1a1a1a;color:#4a443a;font-family:Georgia,'Times New Roman',Times,serif;font-size:11px;letter-spacing:2.5px;text-align:center;text-transform:uppercase;">Daily Brief · $local_date</p>
             $empty_notice
-            <div>
-              <h1 class="section-heading" style="margin:24px 0 4px;color:#77736d;font-size:10px;font-weight:bold;letter-spacing:1.4px;">⭐ TOP 5</h1>
-              $top_stories
-              $categories
-              $addons
-            </div>
-            <div class="footer" style="margin-top:24px;padding-top:14px;border-top:1px solid #dedbd5;color:#8a867f;font-size:10px;line-height:1.5;">
+            <h1 class="section-heading" style="margin:26px 0 0;padding:0 0 8px;border-bottom:1px solid #1a1a1a;color:#1a1a1a;font-family:Georgia,'Times New Roman',Times,serif;font-size:12px;font-weight:bold;letter-spacing:4px;text-align:center;">TOP 5</h1>
+            $top_stories
+            $categories
+            $addons
+            <div class="footer" style="margin-top:34px;padding-top:12px;border-top:4px double #1a1a1a;color:#6e675b;font-family:Georgia,'Times New Roman',Times,serif;font-size:11px;font-style:italic;line-height:1.5;text-align:center;">
               Follow the links for complete reporting from the original sources.
             </div>
           </td></tr></tbody>
