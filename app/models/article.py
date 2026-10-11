@@ -84,6 +84,7 @@ class Article:
     description: str | None = None
     source_categories: tuple[str, ...] = ()
     language: str | None = None
+    image_url: str | None = None
 
     def __post_init__(self) -> None:
         article_id = self.article_id
@@ -144,3 +145,6 @@ class Article:
             if not _LANGUAGE_TAG_PATTERN.fullmatch(language):
                 raise ValueError("language must be a normalized language tag")
             object.__setattr__(self, "language", language)
+
+        if self.image_url is not None:
+            object.__setattr__(self, "image_url", _http_url(self.image_url, "image_url"))
