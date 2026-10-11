@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from types import MappingProxyType
@@ -116,6 +117,7 @@ def _parse_rss(root: ElementTree.Element) -> list[RawProviderEntry]:
             "title": _child_text(item, "title"),
             "link": _child_text(item, "link"),
             "pubDate": _child_text(item, "pubDate"),
+            "image": _find_image(item),
             "description": _child_text(item, "description"),
             "categories": tuple(
                 text
@@ -146,6 +148,7 @@ def _parse_atom(root: ElementTree.Element) -> list[RawProviderEntry]:
             "links": links,
             "published": _child_text(entry, "published"),
             "summary": _child_text(entry, "summary"),
+            "image": _find_image(entry),
             "categories": tuple(
                 category.attrib.get("term", "")
                 for category in entry
@@ -168,3 +171,57 @@ def _child_text(element: ElementTree.Element, name: str) -> str | None:
 
 def _element_text(element: ElementTree.Element) -> str:
     return "".join(element.itertext()).strip()
+
+
+_IMAGE_EXTENSION = re.compile(r"\.(?:jpe?g|png|webp|gif)(?:[?#].*)?\Z", re.IGNORECASE)
+_IMG_SRC = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+_TRACKER_HINTS = ("1x1", "pixel", "spacer", "doubleclick", "feedburner.com/~", "/tracking")
+_MARKUP_FIELDS = frozenset({"description", "encoded", "summary", "content"})
+
+
+def _find_image(element: ElementTree.Element) -> str | None:
+    """Return the most useful image URL a feed entry itself provides, or None.
+
+    Order: media:content, enclosure, media:thumbnail, then the first <img> inside the
+    entry's own markup. Nothing is invented and tracking pixels are skipped.
+    """
+    best: tuple[int, str] | None = None
+
+    def consider(priority: int, url: str | None) -> None:
+        nonlocal best
+        if not url or any(hint in url.lower() for hint in _TRACKER_HINTS):
+            return
+        if best is None or priority < best[0]:
+            best = (priority, url.strip())
+
+    for node in element.iter():
+        name = _local_name(node.tag)
+        attrs = node.attrib
+        media_type = attrs.get("type", "").lower()
+        tiny = any(
+            attrs.get(key, "").isdigit() and int(attrs[key]) <= 5 for key in ("width", "height")
+        )
+        if tiny:
+            continue
+        if name == "content" and attrs.get("url"):
+            if (
+                attrs.get("medium", "").lower() == "image"
+                or media_type.startswith("image/")
+                or _IMAGE_EXTENSION.search(attrs["url"])
+            ):
+                consider(0, attrs["url"])
+        elif name == "enclosure" and attrs.get("url") and media_type.startswith("image/"):
+            consider(1, attrs["url"])
+        elif (
+            name == "link"
+            and attrs.get("rel") == "enclosure"
+            and media_type.startswith("image/")
+        ):
+            consider(1, attrs.get("href"))
+        elif name == "thumbnail" and attrs.get("url"):
+            consider(2, attrs["url"])
+        elif name in _MARKUP_FIELDS:
+            match = _IMG_SRC.search("".join(node.itertext()))
+            if match:
+                consider(3, match.group(1))
+    return best[1] if best else None
