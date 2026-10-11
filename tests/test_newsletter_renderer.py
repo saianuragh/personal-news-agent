@@ -34,6 +34,7 @@ def ranked(
     published_at: datetime | None = GENERATED - timedelta(hours=1),
     categories: tuple[str, ...] = ("Technology",),
     description: str | None = "A source description with useful reporting details.",
+    image_url: str | None = None,
 ):
     article_url = url or f"https://news.example/{uuid4()}"
     article = Article(
@@ -48,6 +49,7 @@ def ranked(
         description=description,
         content_hash=sha256(article_url.encode()).hexdigest(),
         source_categories=categories,
+        image_url=image_url,
     )
     story = deduplicate_articles([article]).stories[0]
     return rank_stories([categorize_story(story)], as_of=GENERATED)[0]
@@ -114,7 +116,7 @@ def test_minimal_header_and_story_link_to_original_article() -> None:
 
     assert "PERSONAL NEWS" in result.html
     assert "Daily Brief · 01 October 2026" in result.html
-    assert "⭐ TOP 5" in result.html
+    assert "TOP 5" in result.html
     assert "New technology announcement" in result.html
     assert "Example &amp; News · 09:30 IST" in result.html
     assert 'href="https://news.example/item?a=1&amp;b=2"' in result.html
