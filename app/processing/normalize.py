@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -125,6 +126,7 @@ def _normalize_entry(
 
     categories = _categories(raw_categories, index, issues)
     language = _language(language_raw, index, issues)
+    image_url = _image_url(fields.get("image"), index, issues)
     content_hash = _content_hash(
         source_id=feed.source.source_id,
         publisher=feed.source.name,
@@ -149,6 +151,7 @@ def _normalize_entry(
         description=description,
         source_categories=categories,
         language=language,
+        image_url=image_url,
     )
     return article, issues
 
@@ -263,6 +266,29 @@ def _atom_alternate_link(raw_value: object) -> str | None:
         if relation in {"alternate", ""}:
             return href
     return first_link
+
+
+def _image_url(value: object, index: int, issues: list[NormalizationIssue]) -> str | None:
+    """Return a safe absolute http(s) image URL, or None. Never fabricates a URL."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    url = html.unescape(value.strip())
+    if url.startswith("//"):
+        url = "https:" + url
+    parts = urlsplit(url)
+    if (
+        parts.scheme.lower() not in {"http", "https"}
+        or not parts.hostname
+        or len(url) > 2_048
+        or any(character.isspace() for character in url)
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        issues.append(NormalizationIssue(index, "image", "Invalid image URL; omitted"))
+        return None
+    return url
 
 
 def _optional_string(value: object) -> str | None:
