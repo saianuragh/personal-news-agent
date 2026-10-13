@@ -154,7 +154,8 @@ def render_newsletter(
     local_date = generated_at.astimezone(zone).strftime("%d %B %Y")
     displays = [display_by_id[item.ranked_story.story.story_id] for item in accepted]
     top_five = displays[:5]
-    sections = _build_sections(displays, top_five)
+    photo_grid = _pick_photo_grid(displays, {display.story_id for display in top_five})
+    sections = _build_sections(displays, [*top_five, *photo_grid])
     template_source = (
         template_path.read_text(encoding="utf-8")
         if not isinstance(template_path, str)
@@ -172,7 +173,7 @@ def render_newsletter(
             else ""
         ),
         addons="",
-        top_stories=_render_top_stories(top_five),
+        top_stories=_render_top_stories(top_five) + _render_photo_grid(photo_grid),
         categories="\n".join(
             _render_html_category(category, members) for category, members in sections
         ),
@@ -180,6 +181,8 @@ def render_newsletter(
 
     text_sections = [_render_text_story(display) for display in top_five]
     category_indexes = [_render_text_category(category, members) for category, members in sections]
+    if photo_grid:
+        category_indexes.insert(0, _render_text_category("In Pictures", photo_grid, limit=6))
     plain_text = "\n\n".join(
         (
             "PERSONAL NEWS",
@@ -257,16 +260,52 @@ def _read_link(url: str, label: str) -> str:
     )
 
 
+# variant: (headline px, summary px, image width px, justified text)
+_VARIANTS = {
+    "lead": (30, 14, 333, True),
+    "side": (17, 12, 185, False),
+    "column": (21, 13, 266, True),
+    "compact": (15, 12, 0, False),
+}
+PHOTO_GRID_MAX = 6
+PHOTO_GRID_MIN = 3
+
+
+def _pick_photo_grid(
+    displays: Sequence[_StoryDisplay], excluded_ids: set[UUID]
+) -> list[_StoryDisplay]:
+    """Stories that carry a feed-supplied photo, for the 'In Pictures' grid (3 or 6 tiles).
+
+    One photo story per category comes first so the grid is varied, then the rest by rank.
+    """
+    candidates = [
+        display
+        for display in displays
+        if display.story_id not in excluded_ids and display.sources[0].image_url
+    ]
+    count = min(len(candidates), PHOTO_GRID_MAX)
+    count -= count % PHOTO_GRID_MIN
+    picked: list[_StoryDisplay] = []
+    seen_categories: set[str] = set()
+    for display in candidates:
+        category = display.categories[0] if display.categories else ""
+        if category not in seen_categories:
+            seen_categories.add(category)
+            picked.append(display)
+    chosen = {display.story_id for display in picked}
+    picked.extend(display for display in candidates if display.story_id not in chosen)
+    return picked[:count]
+
+
 def _render_html_story(
     display: _StoryDisplay,
     *,
-    featured: bool,
-    compact: bool = False,
-    number: int | None = None,
+    variant: str,
     show_image: bool = True,
     rule_above: bool = False,
 ) -> str:
-    """One story. Lead = full width; default = column story; compact = category story."""
+    """One story: lead (front page), side (sidebar), column (two-up) or compact (section)."""
+    headline_px, summary_px, image_width, justified = _VARIANTS[variant]
     source = display.sources[0]
     category = display.categories[0] if display.categories else "NEWS"
     url = escape(source.url, quote=True)
@@ -283,91 +322,119 @@ def _render_html_story(
         f"font-size:10px;font-weight:bold;letter-spacing:2px;text-transform:uppercase;"
         f'border-bottom:1px solid {PAPER_RULE};padding-bottom:3px">{escape(category)}</p>'
     )
-
-    if featured:
-        hero = _image_tag(display, width=560) if show_image else ""
-        figure = (
-            f'<div style="margin:0 0 4px">{hero}</div>'
-            f'<p style="margin:0 0 12px;color:{MUTED};font-family:{SERIF};font-size:10px;'
+    image = _image_tag(display, width=image_width) if show_image and image_width else ""
+    figure = f'<div style="margin:0 0 6px">{image}</div>' if image else ""
+    if image and variant == "lead":
+        figure += (
+            f'<p style="margin:0 0 10px;color:{MUTED};font-family:{SERIF};font-size:10px;'
             f'font-style:italic;text-align:right">Photo: {escape(source.publisher)}</p>'
-            if hero
-            else ""
         )
-        return (
-            f'<div class="story lead" style="padding:18px 0 20px">{kicker}'
-            f'<h3 style="margin:0 0 12px;font-family:{SERIF};font-size:36px;line-height:1.08;'
-            f'font-weight:bold;letter-spacing:-0.5px">{headline}</h3>'
-            f"{figure}"
-            f'<p class="summary" style="margin:0 0 8px;color:#262626;font-family:{SERIF};'
-            f'font-size:15px;line-height:1.55;text-align:justify">{escape(display.summary)}</p>'
-            f"{meta}{_read_link(url, 'READ MORE →')}</div>"
-        )
-
-    image = _image_tag(display, width=266) if show_image else ""
-    figure = f'<div style="margin:0 0 8px">{image}</div>' if image else ""
-    head_size, summary_size = (17, 12) if compact else (21, 13)
+    align = "justify" if justified else "left"
     top_rule = f"border-top:1px solid {PAPER_RULE};padding-top:12px;" if rule_above else ""
+    class_name = {"lead": "story lead", "compact": "story compact"}.get(variant, "story")
+    letter_spacing = "letter-spacing:-0.5px;" if variant == "lead" else ""
     return (
-        f'<div class="{"story compact" if compact else "story"}" '
-        f'style="{top_rule}padding-bottom:14px">'
-        f"{'' if compact else kicker}{figure}"
-        f'<h3 style="margin:0 0 6px;font-family:{SERIF};font-size:{head_size}px;'
-        f'line-height:1.18;font-weight:bold">{headline}</h3>'
+        f'<div class="{class_name}" style="{top_rule}padding-bottom:14px">'
+        f"{'' if variant == 'compact' else kicker}{figure}"
+        f'<h3 style="margin:0 0 6px;font-family:{SERIF};font-size:{headline_px}px;'
+        f'line-height:1.15;font-weight:bold;{letter_spacing}">{headline}</h3>'
         f'<p class="summary" style="margin:0 0 6px;color:#262626;font-family:{SERIF};'
-        f'font-size:{summary_size}px;line-height:1.5;text-align:justify">'
+        f'font-size:{summary_px}px;line-height:1.5;text-align:{align}">'
         f"{escape(display.summary)}</p>"
-        f"{meta}{_read_link(url, '→ READ' if compact else 'READ MORE →')}</div>"
+        f"{meta}{_read_link(url, '→ READ' if variant == 'compact' else 'READ MORE →')}</div>"
     )
 
 
-def _columns(left: str, right: str) -> str:
-    """Two newspaper columns with a thin rule between them (stack on small screens)."""
+def _columns(*cells: str, widths: tuple[int, ...] | None = None) -> str:
+    """Newspaper columns with a thin rule between them (they stack on small screens)."""
+    count = len(cells)
+    widths = widths or tuple([100 // count] * (count - 1) + [100 - (100 // count) * (count - 1)])
+    tds = []
+    for index, (cell, width) in enumerate(zip(cells, widths, strict=True)):
+        first, last = index == 0, index == count - 1
+        rule = "" if first else f"border-left:1px solid {INK};"
+        padding = f"0 {0 if last else 12}px 0 {0 if first else 12}px"
+        class_name = "col" if first else "col col-right"
+        tds.append(
+            f'<td class="{class_name}" width="{width}%" valign="top" '
+            f'style="width:{width}%;padding:{padding};{rule}">{cell}</td>'
+        )
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-        'style="width:100%"><tr>'
-        f'<td class="col" width="50%" valign="top" style="width:50%;padding:0 14px 0 0">{left}</td>'
-        f'<td class="col col-right" width="50%" valign="top" style="width:50%;padding:0 0 0 14px;'
-        f'border-left:1px solid {INK}">{right}</td></tr></table>'
+        f'style="width:100%"><tr>{"".join(tds)}</tr></table>'
     )
 
 
 def _render_top_stories(top: Sequence[_StoryDisplay]) -> str:
-    """Story 1 spans the page; stories 2-5 sit in two columns."""
+    """Front page: lead story with two sidebar stories, then two more in columns."""
     if not top:
         return ""
-    parts = [_render_html_story(top[0], featured=True, number=1)]
-    rest = list(top[1:])
-    for index in range(0, len(rest), 2):
-        pair = rest[index : index + 2]
-        left = _render_html_story(pair[0], featured=False, number=index + 2)
-        right = (
-            _render_html_story(pair[1], featured=False, number=index + 3) if len(pair) > 1 else ""
+    lead = _render_html_story(top[0], variant="lead")
+    sidebar = top[1:3]
+    if sidebar:
+        side_html = "".join(
+            _render_html_story(item, variant="side", rule_above=index > 0)
+            for index, item in enumerate(sidebar)
         )
-        grid = _columns(left, right)
+        front = _columns(lead, side_html, widths=(62, 38))
+    else:
+        front = lead
+    parts = [f'<div style="padding-top:6px">{front}</div>']
+    rest = top[3:5]
+    if rest:
+        grid = _columns(*(_render_html_story(item, variant="column") for item in rest))
         parts.append(f'<div style="border-top:1px solid {INK};padding-top:14px">{grid}</div>')
     return "\n".join(parts)
 
 
-def _render_html_category(category: str, members: list[_StoryDisplay]) -> str:
-    """Section lead (with its photo) on the left; up to two shorter stories on the right."""
-    members = members[:3]
-    lead = _render_html_story(members[0], featured=False, compact=True)
-    if len(members) == 1:
-        body = f'<div style="padding-top:14px">{lead}</div>'
-    else:
-        others = "".join(
-            _render_html_story(
-                item, featured=False, compact=True, show_image=False, rule_above=i > 0
-            )
-            for i, item in enumerate(members[1:])
-        )
-        body = f'<div style="padding-top:14px">{_columns(lead, others)}</div>'
+def _render_tile(display: _StoryDisplay) -> str:
+    source = display.sources[0]
+    category = display.categories[0] if display.categories else "NEWS"
+    url = escape(source.url, quote=True)
     return (
-        '<div class="category-section" style="margin-top:26px">'
+        f'<div class="tile" style="padding-bottom:8px">{_image_tag(display, width=170)}'
+        f'<p style="margin:6px 0 3px;color:{ACCENT};font-family:{SERIF};font-size:10px;'
+        f'font-weight:bold;letter-spacing:1.5px;text-transform:uppercase">{escape(category)}</p>'
+        f'<h3 style="margin:0 0 4px;font-family:{SERIF};font-size:14px;line-height:1.2;'
+        f'font-weight:bold"><a style="color:{INK};text-decoration:none" href="{url}">'
+        f"{escape(display.headline)}</a></h3>"
+        f'<p class="metadata" style="margin:0 0 4px;color:{MUTED};font-family:{SERIF};'
+        f'font-size:11px;font-style:italic">{escape(source.publisher)}</p>'
+        f"{_read_link(url, '→ READ')}</div>"
+    )
+
+
+def _section_heading(title: str) -> str:
+    return (
         f'<h2 class="section-heading" style="margin:0;padding:7px 0;border-top:4px double '
         f"{INK};border-bottom:1px solid {INK};color:{INK};font-family:{SERIF};font-size:13px;"
         f'font-weight:bold;letter-spacing:3px;text-align:center;text-transform:uppercase">'
-        f"{escape(category)}</h2>{body}</div>"
+        f"{escape(title)}</h2>"
+    )
+
+
+def _render_photo_grid(grid: Sequence[_StoryDisplay]) -> str:
+    """'In Pictures': rows of three photo tiles. Only stories with a real photo."""
+    if not grid:
+        return ""
+    rows = "".join(
+        f'<div style="border-top:1px solid {PAPER_RULE};padding-top:12px">'
+        f"{_columns(*(_render_tile(display) for display in grid[index : index + 3]))}</div>"
+        for index in range(0, len(grid), 3)
+    )
+    return (
+        f'<div class="photo-grid" style="margin-top:26px">{_section_heading("In Pictures")}'
+        f"{rows}</div>"
+    )
+
+
+def _render_html_category(category: str, members: list[_StoryDisplay]) -> str:
+    """Up to three text stories side by side in columns."""
+    stories = [_render_html_story(item, variant="compact") for item in members[:3]]
+    body = _columns(*stories) if len(stories) > 1 else stories[0]
+    return (
+        '<div class="category-section" style="margin-top:26px">'
+        f'{_section_heading(category)}<div style="padding-top:14px">{body}</div></div>'
     )
 
 
@@ -384,9 +451,9 @@ def _render_text_story(display: _StoryDisplay, *, compact: bool = False) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def _render_text_category(category: str, members: list[_StoryDisplay]) -> str:
+def _render_text_category(category: str, members: list[_StoryDisplay], *, limit: int = 3) -> str:
     lines = [category.upper()]
-    lines.extend(_render_text_story(display, compact=True) for display in members[:3])
+    lines.extend(_render_text_story(display, compact=True) for display in members[:limit])
     return "\n\n".join(lines)
 
 
