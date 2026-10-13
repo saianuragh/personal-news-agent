@@ -1,5 +1,6 @@
 """Images: extraction from feeds, safe normalization, and classic-layout rendering."""
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from xml.etree import ElementTree
@@ -139,33 +140,63 @@ def test_no_images_means_no_img_tags() -> None:
     assert "<img" not in render([enriched(ranked("Only text here"))]).html
 
 
-def test_lead_and_column_images_fill_their_column() -> None:
-    items = [
-        enriched(ranked(f"Headline number {i}", image_url=f"https://img.example/{i}.jpg"))
-        for i in range(8)
-    ]
-    html = render(items).html
-    top_block = html.split('<div class="category-section"', 1)[0]
-    assert top_block.count("<img ") == 5
-    assert 'width="560"' in top_block  # lead photo spans the page
-    assert top_block.count('width="266"') == 4  # stories 2-5 sit in columns
-    assert "width:100%;max-width:100%" in top_block
-
-
-def test_only_the_section_lead_shows_a_photo_in_category_sections() -> None:
-    items = [
+def photo_items(count: int, *, photo_when=lambda i: True, category: str = "Technology"):
+    return [
         enriched(
             ranked(
-                f"Technology headline {i}",
-                categories=("Technology",),
-                image_url=f"https://img.example/t{i}.jpg",
+                f"Headline number {i:02d}",
+                url=f"https://news.example/h-{i}",
+                categories=(category,),
+                image_url=f"https://img.example/{i}.jpg" if photo_when(i) else None,
             )
         )
-        for i in range(8)
+        for i in range(count)
     ]
-    html = render(items).html
+
+
+def test_front_page_photos_use_lead_side_and_column_widths() -> None:
+    html = render(photo_items(8)).html
+    assert html.count('width="333"') == 1  # lead story
+    assert html.count('width="185"') == 2  # two sidebar stories
+    assert html.count('width="266"') == 2  # two stories in columns
+    assert html.count('width="170"') == 3  # remaining stories form the photo grid
+
+
+def test_photo_grid_holds_only_photo_stories_and_never_repeats_a_story() -> None:
+    result = render(photo_items(12, photo_when=lambda i: i % 2 == 0))
+    html = result.html
+    assert html.count('<div class="tile"') == 3
+    grid_block = html.split('<div class="photo-grid"', 1)[1].split(
+        '<div class="category-section"', 1
+    )[0]
     category_block = html.split('<div class="category-section"', 1)[1]
-    assert category_block.count("<img ") == 1
+    pattern = r'href="(https://news\.example/h-\d+)"'
+    grid_urls = set(re.findall(pattern, grid_block))
+    category_urls = set(re.findall(pattern, category_block))
+    assert len(grid_urls) == 3
+    assert not grid_urls & category_urls
+    assert "<img" not in category_block
+
+
+def test_no_photo_grid_with_fewer_than_three_photos() -> None:
+    html = render(photo_items(10, photo_when=lambda i: i in (6, 7))).html
+    assert "In Pictures" not in html
+    assert 'class="tile"' not in html
+
+
+def test_category_sections_are_text_columns() -> None:
+    html = render(photo_items(14, photo_when=lambda i: False)).html
+    category_block = html.split('<div class="category-section"', 1)[1]
+    assert category_block.count('<div class="story compact"') == 3
+    assert category_block.count('class="col col-right"') == 2  # three columns
+    assert "<img" not in html
+
+
+def test_plain_text_lists_the_photo_grid_once() -> None:
+    text = render(photo_items(12, photo_when=lambda i: i % 2 == 0)).plain_text
+    assert "IN PICTURES" in text
+    for i in range(12):
+        assert len(re.findall(rf"news\.example/h-{i}\b", text)) <= 1
 
 
 def test_top_stories_use_two_columns_and_stack_on_mobile() -> None:
