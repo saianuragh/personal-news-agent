@@ -185,14 +185,16 @@ def _find_image(element: ElementTree.Element) -> str | None:
     Order: media:content, enclosure, media:thumbnail, then the first <img> inside the
     entry's own markup. Nothing is invented and tracking pixels are skipped.
     """
-    best: tuple[int, str] | None = None
+    best: tuple[int, int, str] | None = None
 
-    def consider(priority: int, url: str | None) -> None:
+    def consider(priority: int, url: str | None, width: str = "") -> None:
+        """Prefer the better source type, then the widest picture (sharper when enlarged)."""
         nonlocal best
         if not url or any(hint in url.lower() for hint in _TRACKER_HINTS):
             return
-        if best is None or priority < best[0]:
-            best = (priority, url.strip())
+        candidate = (priority, -(int(width) if width.isdigit() else 0), url.strip())
+        if best is None or candidate[:2] < best[:2]:
+            best = candidate
 
     for node in element.iter():
         name = _local_name(node.tag)
@@ -209,19 +211,15 @@ def _find_image(element: ElementTree.Element) -> str | None:
                 or media_type.startswith("image/")
                 or _IMAGE_EXTENSION.search(attrs["url"])
             ):
-                consider(0, attrs["url"])
+                consider(0, attrs["url"], attrs.get("width", ""))
         elif name == "enclosure" and attrs.get("url") and media_type.startswith("image/"):
-            consider(1, attrs["url"])
-        elif (
-            name == "link"
-            and attrs.get("rel") == "enclosure"
-            and media_type.startswith("image/")
-        ):
+            consider(1, attrs["url"], attrs.get("width", ""))
+        elif name == "link" and attrs.get("rel") == "enclosure" and media_type.startswith("image/"):
             consider(1, attrs.get("href"))
         elif name == "thumbnail" and attrs.get("url"):
-            consider(2, attrs["url"])
+            consider(2, attrs["url"], attrs.get("width", ""))
         elif name in _MARKUP_FIELDS:
             match = _IMG_SRC.search("".join(node.itertext()))
             if match:
                 consider(3, match.group(1))
-    return best[1] if best else None
+    return best[2] if best else None
