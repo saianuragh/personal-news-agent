@@ -65,6 +65,19 @@ def test_tracking_pixels_are_skipped(inner: str) -> None:
     assert _find_image(item(inner)) is None
 
 
+def test_widest_picture_wins_within_the_same_source_type() -> None:
+    node = item(
+        '<media:content url="https://img.example/small.jpg" width="140" medium="image"/>'
+        '<media:content url="https://img.example/large.jpg" width="460" medium="image"/>'
+    )
+    assert _find_image(node) == "https://img.example/large.jpg"
+    node = item(
+        '<media:thumbnail url="https://img.example/a.jpg" width="240"/>'
+        '<media:thumbnail url="https://img.example/b.jpg" width="976"/>'
+    )
+    assert _find_image(node) == "https://img.example/b.jpg"
+
+
 # ---- normalization ---------------------------------------------------------------
 def normalized(image):
     source = load_sources(ROOT / "config" / "sources.yaml")[0]
