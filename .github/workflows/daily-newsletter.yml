@@ -74,6 +74,18 @@ jobs:
             echo "send=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build preview without sending email
+        if: steps.decide.outputs.send != 'true'
+        run: personal-news-agent preview --preview-dir "$RUNNER_TEMP/preview"
+
+      - name: Upload preview
+        if: steps.decide.outputs.send != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: newsletter-preview
+          path: ${{ runner.temp }}/preview
+          retention-days: 3
+
       - name: Run the production newsletter pipeline
         id: send
         if: steps.decide.outputs.send == 'true'
