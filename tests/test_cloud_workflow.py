@@ -59,3 +59,15 @@ def test_keepalive_workflow_is_minimal_and_checks_api_errors() -> None:
     assert "--fail-with-body" in run
     assert "actions/workflows/daily-newsletter.yml/enable" in run
     assert "secrets." not in str(workflow)
+
+
+def test_manual_runs_without_send_build_a_preview_artifact_and_never_send() -> None:
+    workflow = _load("daily-newsletter.yml")
+    steps = {step.get("name"): step for step in workflow["jobs"]["send-newsletter"]["steps"]}
+    preview = steps["Build preview without sending email"]
+    assert preview["if"] == "steps.decide.outputs.send != 'true'"
+    assert "personal-news-agent preview" in preview["run"]
+    assert "personal-news-agent send" not in preview["run"]
+    upload = steps["Upload preview"]
+    assert upload["if"] == "steps.decide.outputs.send != 'true'"
+    assert upload["uses"].startswith("actions/upload-artifact@")
