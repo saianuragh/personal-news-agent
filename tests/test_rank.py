@@ -498,7 +498,7 @@ def test_selection_enforces_limits_and_covers_sections_deterministically() -> No
     assert all("Local" not in item.categories for item in selected)
 
 
-def test_configured_selection_allows_five_per_category_and_caps_total_at_24() -> None:
+def test_configured_selection_allows_three_per_category_and_caps_total_at_12() -> None:
     stories = [
         categorized_story(
             article(
@@ -528,10 +528,13 @@ def test_configured_selection_allows_five_per_category_and_caps_total_at_24() ->
 
     selected = select_stories(ranked, config)
 
-    assert config.max_total_stories == 24
-    assert config.max_per_category == 5
-    assert len(selected) == 24
-    assert sum("AI" in item.categories for item in selected) == 5
+    assert config.max_total_stories == 12
+    assert config.max_per_category == 3
+    assert len(selected) == 12
+    busiest = max(
+        sum(name in item.categories for item in selected) for name in ("AI", "India", "World")
+    )
+    assert busiest <= 3
 
 
 def test_multi_category_story_consumes_each_matching_category_slot() -> None:
