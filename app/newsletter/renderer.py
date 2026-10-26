@@ -267,14 +267,14 @@ _VARIANTS = {
     "column": (21, 13, 266, True),
     "compact": (15, 12, 0, False),
 }
-PHOTO_GRID_MAX = 6
+PHOTO_GRID_MAX = 3
 PHOTO_GRID_MIN = 3
 
 
 def _pick_photo_grid(
     displays: Sequence[_StoryDisplay], excluded_ids: set[UUID]
 ) -> list[_StoryDisplay]:
-    """Stories that carry a feed-supplied photo, for the 'In Pictures' grid (3 or 6 tiles).
+    """Stories that carry a feed-supplied photo, for the 'In Pictures' row (3 tiles).
 
     One photo story per category comes first so the grid is varied, then the rest by rank.
     """
@@ -414,7 +414,7 @@ def _section_heading(title: str) -> str:
 
 
 def _render_photo_grid(grid: Sequence[_StoryDisplay]) -> str:
-    """'In Pictures': rows of three photo tiles. Only stories with a real photo."""
+    """'In Pictures': a row of three photo tiles. Only stories with a real photo."""
     if not grid:
         return ""
     rows = "".join(
