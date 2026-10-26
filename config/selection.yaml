@@ -1,3 +1,25 @@
 # Daily newsletter limits are applied after global ranking to preserve section coverage.
-max_total_stories: 24
-max_per_category: 5
+max_total_stories: 12
+max_per_category: 3
+
+# Stories skipped before selection. Patterns are case-insensitive regular expressions.
+# Add or remove lines here instead of changing code.
+exclude:
+  # Live blogs and minute-by-minute pages (headline or URL, any category).
+  live_updates:
+    - '\blive\s*:'
+    - '\blive\s+(?:blog|text|commentary|coverage|stream|updates?|reports?)\b'
+    - '\bas it happened\b'
+    - '\bminute[- ]by[- ]minute\b'
+    - '[-\u2013\u2014]\s*live\b'
+    - '/live/'
+  # Match reports and transfer gossip (headline, Sports stories only).
+  minor_sports:
+    - '\bmatch reports?\b'
+    - '\btransfers?\b'
+    - '\bgossip\b'
+    - '\brumou?rs?\b'
+    - '\bplayer ratings?\b'
+    - '\bpredicted (?:line-?ups?|xi|teams?)\b'
+    - '\bteam news\b'
+    - '\bline-?ups?\b'
