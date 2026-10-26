@@ -122,6 +122,10 @@ def setup_config(
     repository_config = Path(__file__).resolve().parents[1] / "config"
     for filename in ("categories.yaml", "ranking.yaml", "selection.yaml"):
         shutil.copyfile(repository_config / filename, config_dir / filename)
+    # Pipeline tests own their limits so production tuning (12 stories) cannot change them.
+    (config_dir / "selection.yaml").write_text(
+        "max_total_stories: 24\nmax_per_category: 5\n", encoding="utf-8"
+    )
     source_values = [
         {
             "source_id": source_id,
