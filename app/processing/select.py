@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 import yaml
@@ -22,12 +24,68 @@ CATEGORY_ORDER = (
 )
 
 
+@cache
+def _compiled(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class ExcludeRules:
+    """Regular expressions for stories the digest should skip.
+
+    live_updates: matched against every member headline and URL, in any category.
+    minor_sports: matched against headlines of stories categorized as Sports.
+    """
+
+    live_updates: tuple[str, ...] = ()
+    minor_sports: tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(cls, value: object) -> ExcludeRules:
+        if value is None:
+            return cls()
+        if not isinstance(value, dict):
+            raise ValueError("exclude must be a mapping")
+        parsed: dict[str, tuple[str, ...]] = {}
+        for name in ("live_updates", "minor_sports"):
+            raw = value.get(name, [])
+            if not isinstance(raw, list) or not all(
+                isinstance(pattern, str) and pattern.strip() for pattern in raw
+            ):
+                raise ValueError(f"exclude.{name} must be a list of non-empty patterns")
+            for pattern in raw:
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    raise ValueError(f"exclude.{name} contains an invalid pattern") from error
+            parsed[name] = tuple(raw)
+        return cls(**parsed)
+
+    def reason(self, item: RankedStory) -> str | None:
+        """Return why a story is skipped, or None to keep it."""
+        members = item.story.members
+        titles = [article.title for article in members]
+        live_text = [*titles]
+        for article in members:
+            live_text.extend((article.url, article.canonical_url))
+        if _any_match(self.live_updates, live_text):
+            return "live_updates"
+        if "Sports" in item.categories and _any_match(self.minor_sports, titles):
+            return "minor_sports"
+        return None
+
+
+def _any_match(patterns: tuple[str, ...], texts: list[str]) -> bool:
+    return any(_compiled(pattern).search(text) for pattern in patterns for text in texts)
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionConfig:
     """Limits applied after deterministic scoring to keep a balanced digest."""
 
     max_total_stories: int
     max_per_category: int
+    exclude: ExcludeRules = ExcludeRules()
 
     @classmethod
     def from_mapping(cls, value: object) -> SelectionConfig:
@@ -36,6 +94,7 @@ class SelectionConfig:
         return cls(
             _positive_integer(value.get("max_total_stories"), "max_total_stories", 1, 100),
             _positive_integer(value.get("max_per_category"), "max_per_category", 1, 25),
+            ExcludeRules.from_mapping(value.get("exclude")),
         )
 
 
@@ -57,7 +116,11 @@ def select_stories(
     Each selected multi-category story consumes one slot in every category it
     belongs to. The final output is returned in deterministic global rank order.
     """
-    eligible = [item for item in ranked_stories if item.selection_status == "candidate"]
+    eligible = [
+        item
+        for item in ranked_stories
+        if item.selection_status == "candidate" and config.exclude.reason(item) is None
+    ]
     categories = [
         name for name in CATEGORY_ORDER if any(name in item.categories for item in eligible)
     ]
